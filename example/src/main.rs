@@ -47,13 +47,13 @@ fn demo3<T, U: PartialOrd>(x: &T, y: &T, z1: &U, z2: &U) -> (&T, &T, &U) {
 }
 
 #[lifetime("x, y, z")]
-struct Demo4<'a, 'b, G, R> {
-    x: &'a G,
-    y: &'a G,
-    z: &'b &'b R,
+struct Demo4<G, R> {
+    x: &G,
+    y: &G,
+    z: &R,
 }
 
-impl<'h, 'i, G, R> Demo4<'h, 'i, G, R> {
+impl<G, R> Demo4<G, R> {
     #[lifetime("0, 1: x, y")]
     fn demo4_1<T, U: PartialOrd>(&self, x: &T, y: &T, z1: &U, z2: &U) -> (&T, &T) {
         if z1 >= z2 {

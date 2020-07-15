@@ -1,3 +1,5 @@
+#![feature(box_patterns)]
+
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
@@ -6,7 +8,7 @@ use quote::quote;
 use std::collections::HashMap;
 use syn::{
     parse_macro_input, AttributeArgs, FnArg, GenericParam, Item, ItemFn, ItemStruct, Lifetime,
-    LifetimeDef, Lit, NestedMeta, Pat, ReturnType, Type,
+    LifetimeDef, Lit, NestedMeta, Pat, PatType, ReturnType, Type,
 };
 
 #[proc_macro_attribute]
@@ -17,10 +19,43 @@ pub fn lifetime(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as AttributeArgs);
 
     match parse_macro_input!(input as Item) {
-        Item::Fn(input) => macro_fn(args, input),
         Item::Struct(input) => macro_struct(args, input),
+        Item::Fn(input) => macro_fn(args, input),
         _ => unreachable!(""),
     }
+}
+
+fn macro_struct(args: AttributeArgs, structure: ItemStruct) -> TokenStream {
+    println!("{:#?}", structure);
+    let mut generic_lifetime_symbols = Vec::new();
+    let mut field_lifetime_symbols = HashMap::new();
+
+    for (i, arg) in args.iter().enumerate() {
+        if let NestedMeta::Lit(Lit::Str(arg)) = arg {
+            let arg: String = arg.value().split_whitespace().collect();
+            let field_idents: Vec<&str> = arg.split(",").collect();
+
+            let symbol = format!("'_{}", (i as u8 + 97) as char);
+
+            generic_lifetime_symbols.push(symbol.clone());
+            field_lifetime_symbols.extend(
+                field_idents
+                    .iter()
+                    .map(|&ident| (ident.to_string(), symbol.clone())),
+            );
+        }
+    }
+
+    println!(
+        "{:#?}, {:#?}",
+        generic_lifetime_symbols, field_lifetime_symbols
+    );
+
+    let expanded = quote! {
+        #structure
+    };
+
+    expanded.into()
 }
 
 fn macro_fn(args: AttributeArgs, mut function: ItemFn) -> TokenStream {
@@ -29,37 +64,27 @@ fn macro_fn(args: AttributeArgs, mut function: ItemFn) -> TokenStream {
     let mut output_lifetime_symbols = HashMap::new();
 
     for (i, arg) in args.iter().enumerate() {
-        let mut symbol = String::from("'_");
-        symbol.push((i as u8 + 97) as char);
-        generic_lifetime_symbols.push(symbol.clone());
+        if let NestedMeta::Lit(Lit::Str(arg)) = arg {
+            let arg: String = arg.value().split_whitespace().collect();
+            let arg: Vec<&str> = arg.splitn(2, ":").collect();
+            let input_idents: Vec<&str> = arg[1].split(",").collect();
+            let output_indexs: Vec<&str> = arg[0].split(",").collect();
 
-        let arg = match arg {
-            NestedMeta::Lit(Lit::Str(xxx)) => xxx.value(),
-            _ => unreachable!("it not gonna happen."),
-        };
-        let arg: String = arg.split_whitespace().collect();
+            let symbol = format!("'_{}", (i as u8 + 97) as char);
 
-        let temp: Vec<&str> = arg.split(":").collect();
-        assert_eq!(temp.len(), 2);
-
-        let input_idents: Vec<&str> = temp[1].split(",").collect();
-        let output_indexs: Vec<&str> = temp[0].split(",").collect();
-
-        for input_ident in input_idents {
-            input_lifetime_symbols.insert(input_ident.to_string(), symbol.clone());
-        }
-
-        for output_index in output_indexs {
-            output_lifetime_symbols.insert(output_index.to_string(), symbol.clone());
+            generic_lifetime_symbols.push(symbol.clone());
+            input_lifetime_symbols.extend(
+                input_idents
+                    .iter()
+                    .map(|&ident| (ident.to_string(), symbol.clone())),
+            );
+            output_lifetime_symbols.extend(
+                output_indexs
+                    .iter()
+                    .map(|&index| (index.to_string(), symbol.clone())),
+            );
         }
     }
-
-    /*
-    println!(
-        "symbols: {:#?}, {:#?}, {:#?}",
-        generic_lifetime_symbols, input_lifetime_symbols, output_lifetime_symbols
-    );
-    */
 
     let function_vis = &function.vis;
     let function_ident = &function.sig.ident;
@@ -68,34 +93,28 @@ fn macro_fn(args: AttributeArgs, mut function: ItemFn) -> TokenStream {
     let function_output = &mut function.sig.output;
     let function_block = &function.block;
 
-    //println!("function_vis: {:#?}", function_vis);
-    //println!("function_ident: {:#?}", function_ident);
-    //println!("function_generics: {:#?}", function_generics);
-    //println!("function_inputs: {:#?}", function_inputs);
-    //println!("function_output: {:#?}", function_output);
-
     // function generics
     for symbol in generic_lifetime_symbols {
-        let lt = Lifetime::new(&symbol, Span::call_site());
-        let lt = LifetimeDef::new(lt);
-        let lt = GenericParam::from(lt);
-
-        function_generics.params.push(lt);
+        let lt = LifetimeDef::new(Lifetime::new(&symbol, Span::call_site()));
+        function_generics.params.push(GenericParam::from(lt));
     }
 
     // function inputs
     for function_input in function_inputs.iter_mut() {
         //println!("function_input: {:#?}", function_input);
 
-        if let FnArg::Typed(ref mut pt) = *function_input {
-            if let Pat::Ident(ref pi) = *pt.pat {
-                if let Type::Reference(ref mut tr) = *pt.ty {
-                    if input_lifetime_symbols.contains_key(&pi.ident.to_string()) {
-                        let symbol = &input_lifetime_symbols[&pi.ident.to_string()];
-                        tr.lifetime = Some(Lifetime::new(symbol, Span::call_site()));
-                    }
+        match *function_input {
+            FnArg::Typed(PatType {
+                pat: box Pat::Ident(ref pi),
+                ty: box Type::Reference(ref mut tr),
+                ..
+            }) => {
+                let symbol = input_lifetime_symbols.get(&pi.ident.to_string());
+                if symbol.is_some() {
+                    tr.lifetime = Some(Lifetime::new(symbol.unwrap(), Span::call_site()));
                 }
             }
+            _ => (),
         }
     }
 
@@ -124,14 +143,6 @@ fn macro_fn(args: AttributeArgs, mut function: ItemFn) -> TokenStream {
         #function_vis fn #function_ident #function_generics(#function_inputs) #function_output {
             #function_block
         }
-    };
-
-    expanded.into()
-}
-
-fn macro_struct(args: AttributeArgs, structure: ItemStruct) -> TokenStream {
-    let expanded = quote! {
-        #structure
     };
 
     expanded.into()
