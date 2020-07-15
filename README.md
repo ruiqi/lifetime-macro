@@ -1,2 +1,2 @@
 # lifetime-macro
-Lifetime macro for rust lang.
+Lifetime macro for Rust.
