@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+    "example",
+    "lifetime_derive",
+]
