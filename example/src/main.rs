@@ -1,9 +1,9 @@
-use lifetime_derive::lifetime;
+use lifetime_derive::{lifetime, lifetime_nothing};
 
 fn main() {}
 
 /*
-#[lifetime("0, 1 -> x, y")]
+#[lifetime("x, y -> (0), (1)")]
 fn demo1<T, U: PartialOrd>(x: &T, y: &T, z1: &U, z2: &U) -> (&T, &T) {
     if z1 >= z2 {
         (x, y)
@@ -12,7 +12,7 @@ fn demo1<T, U: PartialOrd>(x: &T, y: &T, z1: &U, z2: &U) -> (&T, &T) {
     }
 }
 
-#[lifetime("0 -> x, y")]
+#[lifetime("x, y -> (0)")]
 fn demo2<T, U: PartialOrd>(x: &T, y: &T, z1: &U, z2: &U) -> &T {
     if z1 >= z2 {
         x
@@ -21,7 +21,7 @@ fn demo2<T, U: PartialOrd>(x: &T, y: &T, z1: &U, z2: &U) -> &T {
     }
 }
 
-#[lifetime("0, 1 -> x, y", "2 -> z1, z2")]
+#[lifetime("x, y -> (0), (1)", "z1, z2 -> (2)")]
 fn demo3<T, U: PartialOrd>(x: &T, y: &T, z1: &U, z2: &U) -> (&T, &T, &U) {
     if z1 >= z2 {
         (x, y, z1)
@@ -30,7 +30,7 @@ fn demo3<T, U: PartialOrd>(x: &T, y: &T, z1: &U, z2: &U) -> (&T, &T, &U) {
     }
 }
 
-#[lifetime("x, y, z")]
+#[lifetime()]
 struct Demo4<G, R> {
     x: &G,
     y: &G,
@@ -39,7 +39,7 @@ struct Demo4<G, R> {
 
 #[lifetime()]
 impl<G, R> Demo4<G, R> {
-    #[lifetime("0, 1 -> x, y")]
+    #[lifetime("x, y -> (0), (1)")]
     fn demo4_1<T, U: PartialOrd>(&self, x: &T, y: &T, z1: &U, z2: &U) -> (&T, &T) {
         if z1 >= z2 {
             (x, y)
@@ -48,7 +48,7 @@ impl<G, R> Demo4<G, R> {
         }
     }
 
-    #[lifetime("0 -> x, y")]
+    #[lifetime("x, y -> (0)")]
     fn demo4_2<T, U: PartialOrd>(&self, x: &T, y: &T, z1: &U, z2: &U) -> &T {
         if z1 >= z2 {
             x
@@ -57,7 +57,7 @@ impl<G, R> Demo4<G, R> {
         }
     }
 
-    #[lifetime("0, 1 -> x, y", "2 -> z1, z2")]
+    #[lifetime("x, y -> (0), (1)", "z1, z2 -> (1), (2)")]
     fn demo4_3<T, U: PartialOrd>(&self, x: &T, y: &T, z1: &U, z2: &U) -> (&T, &T, &U) {
         if z1 >= z2 {
             (x, y, z1)
@@ -67,30 +67,52 @@ impl<G, R> Demo4<G, R> {
     }
 }
 
-#[lifetime("x, y", "z")]
+#[lifetime()]
 struct Demo5<G, R> {
     x: &G,
     y: &G,
     z: &R,
 }
 
-//#[lifetime()]
+#[lifetime()]
 impl<G, R> Demo5<G, R> {
-    /*
-    // .x -> x, .y -> y, .z -> z
-    fn demo5_1(x: &'a G, y: &'a G, z: &'b R) -> Self {
+    #[lifetime(
+        "x -> self.x",
+        "y -> self.y",
+        "z -> self.z",
+    )]
+    fn demo5_0(x: &G, y: &G, z: &R) -> Self  {
         Self { x: x, y: y, z: z }
     }
 
-    // .x -> x, .z -> z
-    fn demo5_2(&mut self, x: &'a G, z: &'b R) -> &Self {
+    #[lifetime(
+        "x -> self.x",
+        "y -> self.y",
+        "z -> self.z",
+    )]
+    fn demo5_1(x: &G, y: &G, z: &R) -> i64  {
+        Self { x: x, y: y, z: z };
+
+        18
+    }
+
+    #[lifetime(
+        "self -> (0)",
+        "x -> self.x",
+        "z -> self.z",
+    )]
+    fn demo5_2(&mut self, x: &G, z: &R) -> &Self {
         self.x = x;
         self.z = z;
         self
     }
 
-    // (0) -> .x, .y -> x, y
-    fn demo5_3(&mut self, x: &'a G, y: &'a G, z: &'b R) -> &'a G {
+    #[lifetime(
+        "x -> self.x -> (0)",
+        "y -> self.y -> (0)",
+        "z -> self.z",
+    )]
+    fn demo5_3(&mut self, x: &G, y: &G, z: &R) -> &G {
         self.x = x;
         self.y = y;
         self.z = z;
@@ -102,26 +124,37 @@ impl<G, R> Demo5<G, R> {
         }
     }
 
-    // (1) -> .x -> x, .z -> z, (2) -> o, .y - y,
-    fn demo5_5<'c>(&mut self, x: &'a G, y: &'a G, z: &'b R, o: &'c G) -> (&Self, &'a G, &'c G) {
+    #[lifetime(
+        "self -> (0)",
+        "x -> self.x -> (1)",
+        "y -> self.y",
+        "z -> self.z",
+        "o -> (2)",
+    )]
+    fn demo5_5(&mut self, x: &G, y: &G, z: &R, o: &G) -> (&Self, &G, &G) {
         self.x = x;
         self.y = y;
         self.z = z;
 
         (self, self.x, o)
     }
-    */
 }
 
-struct Deom6<'a, 'b, 'c, G> {
-    x: &'a G,
-    y: &'b G,
-    z: &'c G,
+#[lifetime()]
+struct Deom6<G> {
+    x: &G,
+    y: &G,
+    z: &G,
 }
 
-impl<'a, 'b, 'c, G> Deom6<'a, 'b, 'c, G> {
-    // (0, 1) -> .x, .y, .z -> x, y, z
-    fn demo6_1<'d, 'f>(&mut self, x: &'a G, y: &'b G, z: &'c G, p: &'d G, o: i64) -> (&G, &G) {
+#[lifetime()]
+impl<G> Deom6<G> {
+    #[lifetime(
+        "x -> self.x -> (0), (1)"
+        "y -> self.y -> (0), (1)"
+        "z -> self.z -> (0), (1)"
+    )]
+    fn demo6_1(&mut self, x: &G, y: &G, z: &G, p: &G, o: i64) -> (&G, &G) {
         self.x = x;
         self.y = y;
         self.z = z;
@@ -138,8 +171,12 @@ impl<'a, 'b, 'c, G> Deom6<'a, 'b, 'c, G> {
         }
     }
 
-    // (0) -> .x, .y, .z -> x, y, z
-    fn demo6_2(&self, x: &'a G, y: &'b G, z: &'c G, o: i64) -> &G {
+    #[lifetime(
+        "x -> self.x -> (0)",
+        "y -> self.y -> (0)",
+        "z -> self.z -> (0)",
+    )]
+    fn demo6_2(&self, x: &G, y: &G, z: &G, o: i64) -> &G {
         let temp = Self { x: x, y: y, z: z };
 
         match o {
@@ -154,28 +191,122 @@ impl<'a, 'b, 'c, G> Deom6<'a, 'b, 'c, G> {
         }
     }
 }
+*/
 
-struct Context<'s>(&'s str);
-
-// #lifetime(".context(0)", ".context(1), context2(0)")
-struct Parser<'c, 's> {
-    context: &'c Context<'s>,
+#[lifetime()]
+struct GGG<G> {
+    g: &&G,
 }
 
-// #lifetime()
-impl<'c, 's: 'q + 'e, 'q, 'e> Parser<'c, 's> {
-    // #lifetime("(0) -> .context(1)")
-    fn parse(&self) -> Result<(), &'q str> {
+#[lifetime()]
+struct Context<T, G> {
+    t: &T,
+    e: Result<GGG<G>, ()>,
+}
+
+#[lifetime()]
+struct Parser<T, G> {
+    t: &T,
+    context: &Context<T, G>,
+}
+
+#[lifetime()]
+impl<T, G>
+    Parser<T, G>
+{
+    #[lifetime(
+        "self.context(1) -> (0)",
+        "self.context.e.g(0) -> (1)",
+        "self.context.e.g(1) -> (2)",
+    )]
+    fn parse(&self) -> Result<(), (&T, &&G)> {
+        if self.context.e.is_ok() {
+            Err((self.context.t, self.context.e.as_ref().ok().unwrap().g))
+        } else {
+            unreachable!()
+        }
+    }
+
+    #[lifetime(
+        "context1.t(0) -> (0)",
+        "context1.u.g(0) -> (1)",
+        "context1.u.g(1) -> (2)",
+    )]
+    fn parse_context(t: T, context1: Context<T, G>) -> Result<(), (&T, &&G)> {
+        Parser {
+            t: &t,
+            context: &context1
+        }.parse()
+    }
+}
+
+/*
+//#[lifetime()]
+struct Context<'a, 'b, 'c, T, G> {
+    t: &'a T,
+    e: Result<GGG<'b, 'c, G>, ()>,
+}
+
+//#[lifetime()]
+struct Parser<'a, 'b, 'c, 'd, 'e, T, G> {
+    t: &'a T,
+    context: &'b Context<'c, 'd, 'e, T, G>,
+}
+
+//#[lifetime()]
+impl<'a, 'b, 'c: 'g, 'd: 'h, 'e: 'i, 'f, 'g, 'h, 'i, 'j: 'p, 'k: 'q, 'l: 'r, 'p, 'q, 'r, T, G>
+    Parser<'a, 'b, 'c, 'd, 'e, T, G>
+{
+    //#[lifetime(
+    //    "self.context(1) -> (0)",
+    //    "self.context.e.g(0) -> (1)",
+    //    "self.context.e.g(1) -> (2)",
+    //)]
+    fn parse(&'f self) -> Result<(), (&'g T, &'h &'i G)> {
+        if self.context.e.is_ok() {
+            Err((self.context.t, self.context.e.as_ref().ok().unwrap().g))
+        } else {
+            unreachable!()
+        }
+    }
+
+    //#[lifetime(
+    //    "context1.t(0) -> (0)",
+    //    "context1.u.g(0) -> (1)",
+    //    "context1.u.g(1) -> (2)",
+    //)]
+    fn parse_context(t: T, context1: Context<'j, 'k, 'l, T, G>) -> Result<(), (&'p T, &'q &'r G)> {
+        Parser {
+            t: &t,
+            context: &context1
+        }.parse()
+    }
+}
+*/
+
+/*
+struct XContext<'a>(&'a str);
+
+struct XParser<'a, 'b> {
+    context: &'a XContext<'b>,
+}
+
+impl<'a, 'b: 'd, 'c, 'd, 'e: 'f, 'f> XParser<'a, 'b> {
+    // self.context(1) -> (0)
+    fn xparse(&'c self) -> Result<(), &'d str> {
         Err(&self.context.0[1..])
     }
 
-    // #lifetime("(0) -> .context(1), .context(0) -> context(0), context2(1)")
-    fn parse_context<'g>(context: Context<'g>) -> Result<(), &'g str> {
-        Parser { context: &context }.parse()
+    // context.s(0) -> (0)
+    fn xparse_context(context: XContext<'e>) -> Result<(), &'f str> {
+        XParser { context: &context }.xparse()
     }
 }
+*/
 
-fn test1<'a: 'd, 'b: 'd, 'c: 'd, 'd, T>(x: &'a T, y: &'b T, z: &'c T) -> &'d T {
+/*
+#[lifetime()]
+fn test1(x: &T, y: &T, z: &T) -> &T {
     let n = 3;
     match n {
         1 => x,
@@ -186,6 +317,7 @@ fn test1<'a: 'd, 'b: 'd, 'c: 'd, 'd, T>(x: &'a T, y: &'b T, z: &'c T) -> &'d T {
 }
 */
 
+/*
 #[lifetime()]
 struct Test2<T> {
     x: &T,
@@ -277,21 +409,22 @@ impl<T> Test2<T> {
         }
     }
 }
+*/
 
 /*
-struct Test3<'b> {
-    x: Option<&'b Self>,
+struct Test3 {
+    x: Option<&Self>,
 }
 
-impl<'b, 'd2: 'b> Test3<'b> {
-    //fn test3_1<'c1: 'b>(&'c1 mut self) {
+impl<, 2: > Test3 {
+    //fn test3_1<1: >(&1 mut self) {
     //    self.x = Some(self);
     //}
 
-    fn test3_2(&mut self, t: &'d2 Test3) {
+    fn test3_2(&mut self, t: &2 Test3) {
         self.x = Some(t);
     }
 }
 */
 
-struct Test4 {}
+//struct Test4 {}

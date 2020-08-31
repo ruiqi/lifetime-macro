@@ -1,8 +1,42 @@
+use super::{LIFETIME_COORDS_MAP};
 use mutable_hashset::ordered_set::MutOrderedSet as Set;
 use proc_macro2::Span;
 use std::hash::{Hash, Hasher};
 use syn::punctuated::Punctuated;
 use syn::*;
+
+enum RDigrphORRnode<'a> {
+    RDigrph(*mut RDigrph<'a>),
+    RNode(RNode<'a>),
+}
+pub struct RNode<'a> {
+    pub name: String,
+    pub lf: &'a mut Lifetime,
+}
+
+struct RDigrph<'a> {
+    pub name: String,
+    pub nodes: Vec<RDigrphORRnode<'a>>,
+}
+
+impl<'a> RDigrph<'a> {
+    fn get_coords(&self) -> Vec<(String, u8)> {
+        let mut coords = vec![];
+
+        for (i, node) in self.nodes.iter().enumerate() {
+            match node {
+                RDigrphORRnode::RDigrph(digrph) => unsafe {
+                    coords.extend((**digrph).get_coords());
+                }
+                RDigrphORRnode::RNode(node) => {
+                    coords.push((node.name.clone(), i as u8))
+                }
+            }
+        }
+
+        coords
+    }
+}
 
 #[derive(Debug)]
 pub struct RefNode<'a> {
@@ -27,7 +61,7 @@ impl<'a> Hash for RefNode<'a> {
 
 pub enum LifetimeOrigin<'a> {
     FnInputs(&'a mut Punctuated<FnArg, Token![,]>),
-    FnOutout(&'a mut ReturnType),
+    FnOutput(&'a mut ReturnType),
     StructFields(&'a mut Fields),
 }
 
@@ -59,6 +93,7 @@ pub fn get_ref_nodes<'a>(
                             });
                         }
                         FnArg::Typed(pt) => {
+                            println!("pt: {:#?}", pt);
                             nodes.extend(get_ref_nodes_from_type(
                                 get_name_from_pat(&pt.pat),
                                 &mut 0,
@@ -70,7 +105,7 @@ pub fn get_ref_nodes<'a>(
                     }
                 }
             }
-            LifetimeOrigin::FnOutout(output) => match output {
+            LifetimeOrigin::FnOutput(output) => match output {
                 ReturnType::Type(_, box ref mut ty) => {
                     nodes.extend(get_ref_nodes_from_type(
                         String::from("Output!"),
@@ -109,6 +144,7 @@ fn get_ref_nodes_from_type<'a>(
     ty: &'a mut Type,
     symbol_generator: &mut SymbolGenerator,
 ) -> Set<RefNode<'a>> {
+    //println!("ty: {:#?}", ty);
     let mut nodes = Set::new();
 
     match ty {
@@ -164,7 +200,7 @@ fn get_ref_nodes_from_type<'a>(
             ));
         }
         _ => {
-            println!("ty: {:#?}", ty);
+            //println!("ty: {:#?}", ty);
             unreachable!()
         } /*
           Type::Array(_) => {}
@@ -189,12 +225,17 @@ fn get_ref_nodes_from_type<'a>(
 fn get_ref_nodes_from_path<'a>(
     name: String,
     index: &mut u8,
-    pt: &'a mut Path,
+    path: &'a mut Path,
     symbol_generator: &mut SymbolGenerator,
 ) -> Set<RefNode<'a>> {
+    println!("name: {}", name);
+    println!("path: {:#?}\nident:{:?}", path, path.get_ident());
+    
     let mut nodes = Set::new();
 
-    for segment in pt.segments.iter_mut() {
+    let segments_coords = set_path_lfs_and_get_coords(path, symbol_generator);
+
+    for (segment, coords) in path.segments.iter_mut().zip(segments_coords) {
         match segment.arguments {
             PathArguments::AngleBracketed(AngleBracketedGenericArguments {
                 ref mut args, ..
@@ -203,7 +244,7 @@ fn get_ref_nodes_from_path<'a>(
                     match arg {
                         GenericArgument::Type(ref mut ty) => {
                             nodes.extend(get_ref_nodes_from_type(
-                                name.clone(),
+                                format!("{}", name),
                                 index,
                                 ty,
                                 symbol_generator,
@@ -234,7 +275,17 @@ fn get_ref_nodes_from_path<'a>(
                                 }
                             }
                         }
-                        _ => (),
+                        GenericArgument::Lifetime(lf) => {
+                            nodes.insert(RefNode {
+                                name: name.clone(),
+                                index: *index,
+                                lf: lf,
+                            });
+                            *index += 1;
+                        }
+                        _ => (), /*
+                                 GenericArgument::Const(_) => {}
+                                 */
                     }
                 }
             }
@@ -268,6 +319,49 @@ fn get_ref_nodes_from_path<'a>(
     nodes
 }
 
+fn set_path_lfs_and_get_coords(pt: &mut Path, symbol_generator: &mut SymbolGenerator) -> Vec<Option<Vec<(String, u8)>>>{
+    let mut segments_coords = vec![];
+
+    for segment in pt.segments.iter_mut() {
+        let name = segment.ident.to_string();
+        let coords = get_lifetime_coords(name.clone());
+
+        if let Some(coords) = coords.clone() {
+            let symbols = symbol_generator.generate_n(coords.len() as u8);
+
+            for symbol in symbols {
+                // structure generics lifetime
+                if let PathArguments::None = segment.arguments {
+                    segment.arguments =
+                        PathArguments::AngleBracketed(AngleBracketedGenericArguments {
+                            colon2_token: None,
+                            lt_token: token::Lt {
+                                spans: [Span::call_site(); 1],
+                            },
+                            args: punctuated::Punctuated::new(),
+                            gt_token: token::Gt {
+                                spans: [Span::call_site(); 1],
+                            },
+                        })
+                }
+
+                if let PathArguments::AngleBracketed(AngleBracketedGenericArguments {
+                    ref mut args,
+                    ..
+                }) = segment.arguments
+                {
+                    let lt = Lifetime::new(&symbol, Span::call_site());
+                    args.push(GenericArgument::Lifetime(lt));
+                }
+            }
+        }
+
+        segments_coords.push(coords);
+    }
+
+    segments_coords
+}
+
 fn get_name_from_pat(pat: &Pat) -> String {
     match pat {
         Pat::Box(PatBox { box ref pat, .. }) => get_name_from_pat(pat),
@@ -276,6 +370,26 @@ fn get_name_from_pat(pat: &Pat) -> String {
         Pat::Type(PatType { box ref pat, .. }) => get_name_from_pat(pat),
         _ => unreachable!(),
     }
+}
+
+pub fn set_lifetime_coords(name: String, ref_nodes: Set<RefNode>) {
+    let mut lifetime_coords_map = LIFETIME_COORDS_MAP.lock().unwrap();
+    //let coords = lifetime_coords_map.get(&name.clone()).unwrap();
+    let lifetime_coords: Vec<(String, u8)> = ref_nodes
+        .iter()
+        .map(|node| (node.name.clone(), node.index as u8))
+        .collect();
+
+    println!("[{}] set lifetime coords: {:?}", name, lifetime_coords);
+    lifetime_coords_map.insert(name.clone(), lifetime_coords);
+}
+
+pub fn get_lifetime_coords(name: String) -> Option<Vec<(String, u8)>> {
+    let lifetime_coords_map = LIFETIME_COORDS_MAP.lock().unwrap();
+    let lifetime_coords = lifetime_coords_map.get(&name.clone()).map(|v| (*v).clone());
+
+    println!("[{}] get lifetime coords: {:?}", name, lifetime_coords);
+    lifetime_coords
 }
 
 pub struct SymbolGenerator {

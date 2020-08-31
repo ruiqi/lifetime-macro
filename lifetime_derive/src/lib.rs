@@ -9,15 +9,18 @@ use mutable_hashset::ordered_set::MutOrderedSet as Set;
 use proc_macro::TokenStream;
 use proc_macro2::{Group, Span, TokenTree};
 use quote::quote;
-use ref_nodes::{get_ref_nodes, LifetimeOrigin, RefNode, SymbolGenerator};
+use ref_nodes::{
+    get_lifetime_coords, get_ref_nodes, set_lifetime_coords, LifetimeOrigin, RefNode,
+    SymbolGenerator,
+};
 use regex::Regex;
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, Receiver as RX, Sender as TX};
 use std::sync::Mutex;
+use std::time::Duration;
 use syn::*;
 
 lazy_static! {
-    static ref REF_DIGRAPH_CHANNELS: Mutex<HashMap<String, (TX<Vec<(String, u8)>>, RX<Vec<(String, u8)>>)>> =
+    static ref LIFETIME_COORDS_MAP: Mutex<HashMap<String, Vec<(String, u8)>>> =
         Mutex::new(HashMap::new());
 }
 
@@ -30,27 +33,44 @@ pub fn lifetime(args: TokenStream, input: TokenStream) -> TokenStream {
         Item::Struct(structure) => macro_struct(structure),
         Item::Impl(implementation) => macro_impl(implementation),
         Item::Fn(function) => {
-            //println!("sig.input: {}: {:#?}", function.sig.ident, function.sig.inputs.first());
-            if input_is_self(function.sig.inputs.first()) {
-                macro_instance_fn(function)
-            } else {
-                let args = parse_macro_input!(args as AttributeArgs);
-                let args: Vec<String> = args
-                    .iter()
-                    .filter_map(|arg| {
-                        if let NestedMeta::Lit(Lit::Str(arg)) = arg {
-                            Some(arg.value())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+            let args = parse_macro_input!(args as AttributeArgs);
+            let args: Vec<String> = args
+                .iter()
+                .filter_map(|arg| {
+                    if let NestedMeta::Lit(Lit::Str(arg)) = arg {
+                        Some(arg.value())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
-                macro_static_fn(args, function)
-            }
+            macro_static_fn(args, function)
         }
-        _ => unreachable!(""),
+        _ => unreachable!(),
+        /*
+        Item::Const(_) => {}
+        Item::Enum(_) => {}
+        Item::ExternCrate(_) => {}
+        Item::ForeignMod(_) => {}
+        Item::Macro(_) => {}
+        Item::Macro2(_) => {}
+        Item::Mod(_) => {}
+        Item::Static(_) => {}
+        Item::Trait(_) => {}
+        Item::TraitAlias(_) => {}
+        Item::Type(_) => {}
+        Item::Union(_) => {}
+        Item::Use(_) => {}
+        Item::Verbatim(_) => {}
+        Item::__Nonexhaustive => {}
+        */
     }
+}
+
+#[proc_macro_attribute]
+pub fn lifetime_nothing(_: TokenStream, input: TokenStream) -> TokenStream {
+    input
 }
 
 fn macro_struct(mut structure: ItemStruct) -> TokenStream {
@@ -68,19 +88,20 @@ fn macro_struct(mut structure: ItemStruct) -> TokenStream {
         structure.generics.params.push(GenericParam::from(lt));
     }
 
-    send_ref_coords(name, ref_nodes);
+    set_lifetime_coords(name, ref_nodes);
 
     quote!(#structure).into()
 }
 
 fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
-    //println!("{:#?}", implementation.items);
+    //println!("{:#?}", implementation);
     let symbol_generator = &mut SymbolGenerator::new(String::from("i_"));
 
     let mut ref_coords = vec![];
     let mut gps = HashMap::new();
     let mut edges = vec![];
 
+    //println!("self_ty: {:#?}", implementation.self_ty);
     match implementation.self_ty {
         box Type::Path(TypePath {
             path: Path {
@@ -88,16 +109,11 @@ fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
             },
             ..
         }) => {
-            let segment: &mut PathSegment = segments.first_mut().unwrap();
-            match segment.arguments {
-                PathArguments::AngleBracketed(AngleBracketedGenericArguments {
-                    ref mut args,
-                    ..
-                }) => {
-                    let name = segment.ident.to_string();
+            for segment in segments.iter_mut() {
+                let name = segment.ident.to_string();
+                let coords = get_lifetime_coords(name);
 
-                    let coords = revc_ref_coords(name);
-
+                if let Some(coords) = coords {
                     let symbols = symbol_generator.generate_n(coords.len() as u8);
                     for symbol in symbols {
                         // implementation generics lifetime
@@ -105,13 +121,32 @@ fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
                         implementation.generics.params.push(GenericParam::from(lt));
 
                         // structure generics lifetime
-                        let lt = Lifetime::new(&symbol, Span::call_site());
-                        args.push(GenericArgument::Lifetime(lt));
+                        if let PathArguments::None = segment.arguments {
+                            segment.arguments =
+                                PathArguments::AngleBracketed(AngleBracketedGenericArguments {
+                                    colon2_token: None,
+                                    lt_token: token::Lt {
+                                        spans: [Span::call_site(); 1],
+                                    },
+                                    args: punctuated::Punctuated::new(),
+                                    gt_token: token::Gt {
+                                        spans: [Span::call_site(); 1],
+                                    },
+                                })
+                        }
+
+                        if let PathArguments::AngleBracketed(AngleBracketedGenericArguments {
+                            ref mut args,
+                            ..
+                        }) = segment.arguments
+                        {
+                            let lt = Lifetime::new(&symbol, Span::call_site());
+                            args.push(GenericArgument::Lifetime(lt));
+                        }
                     }
 
                     ref_coords.extend(coords);
                 }
-                _ => (),
             }
         }
         _ => (),
@@ -121,61 +156,69 @@ fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
         //println!("item: {:#?}", item);
         match item {
             ImplItem::Method(iim) => {
-                if input_is_self(iim.sig.inputs.first()) {
-                    let fn_name = iim.sig.ident.to_string();
+                let fn_name = iim.sig.ident.to_string();
 
-                    for attr in iim.attrs.iter() {
-                        //println!("attr: {:#?}", attr);
-                        if attr.path.segments[0].ident.to_string() == "lifetime" {
-                            //println!("attr.tokens: {:#?}", attr.tokens);
-                            let group: Group = syn::parse2(attr.tokens.clone()).unwrap();
-                            for token in group.stream() {
-                                if let TokenTree::Literal(li) = token {
-                                    edges.extend(
-                                        get_edges(li.to_string().trim_matches('"').to_string())
-                                            .into_iter()
-                                            .map(|edge| {
-                                                (
-                                                    if edge.0.starts_with("self.") {
-                                                        edge.0
-                                                    } else {
-                                                        format!("{}/{}", fn_name, edge.0)
-                                                    },
-                                                    edge.1,
-                                                    if edge.2.starts_with("self.") {
-                                                        edge.2
-                                                    } else {
-                                                        format!("{}/{}", fn_name, edge.2)
-                                                    },
-                                                    edge.3,
-                                                )
-                                            }),
-                                    );
-                                }
+                for attr in iim.attrs.iter_mut() {
+                    //println!("attr: {:#?}", attr);
+                    if attr.path.segments[0].ident.to_string() == "lifetime" {
+                        attr.path.segments[0].ident =
+                            Ident::new("lifetime_nothing", Span::call_site());
+
+                        //println!("attr.tokens: {:#?}", attr.tokens);
+                        let group: Group = syn::parse2(attr.tokens.clone()).unwrap();
+                        for token in group.stream() {
+                            if let TokenTree::Literal(li) = token {
+                                edges.extend(
+                                    get_edges(li.to_string().trim_matches('"').to_string())
+                                        .into_iter()
+                                        .map(|edge| {
+                                            (
+                                                if edge.0.starts_with("self.") {
+                                                    edge.0
+                                                } else {
+                                                    format!("{}/{}", fn_name, edge.0)
+                                                },
+                                                edge.1,
+                                                if edge.2.starts_with("self.") {
+                                                    edge.2
+                                                } else {
+                                                    format!("{}/{}", fn_name, edge.2)
+                                                },
+                                                edge.3,
+                                            )
+                                        }),
+                                );
                             }
                         }
                     }
+                }
 
-                    let ref_nodes = get_ref_nodes(
-                        vec![
-                            LifetimeOrigin::FnInputs(&mut iim.sig.inputs),
-                            LifetimeOrigin::FnOutout(&mut iim.sig.output),
-                        ],
-                        symbol_generator,
-                    );
+                let ref_nodes = get_ref_nodes(
+                    vec![
+                        LifetimeOrigin::FnInputs(&mut iim.sig.inputs),
+                        LifetimeOrigin::FnOutout(&mut iim.sig.output),
+                    ],
+                    symbol_generator,
+                );
 
-                    for ref_node in ref_nodes {
-                        let lt = LifetimeDef::new(Lifetime::new(
-                            &format!("'{}", &ref_node.lf.ident),
-                            Span::call_site(),
-                        ));
-                        implementation.generics.params.push(GenericParam::from(lt));
+                for ref_node in ref_nodes {
+                    let lt = LifetimeDef::new(Lifetime::new(
+                        &format!("'{}", &ref_node.lf.ident),
+                        Span::call_site(),
+                    ));
+                    implementation.generics.params.push(GenericParam::from(lt));
 
-                        ref_coords.push((format!("{}/{}", fn_name, ref_node.name), ref_node.index));
-                    }
+                    ref_coords.push((format!("{}/{}", fn_name, ref_node.name), ref_node.index));
                 }
             }
-            _ => (),
+            _ => unreachable!(),
+            /*
+            ImplItem::Const(_) => {}
+            ImplItem::Type(_) => {}
+            ImplItem::Macro(_) => {}
+            ImplItem::Verbatim(_) => {}
+            ImplItem::__Nonexhaustive => {}
+            */
         }
     }
 
@@ -196,7 +239,6 @@ fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
         gps.insert(ref_coord, gp);
     }
 
-    println!("impl set gp ----------------------------------");
     set_gp_bounds(gps, edges);
 
     quote!(#implementation).into()
@@ -248,10 +290,6 @@ fn macro_static_fn(args: Vec<String>, mut function: ItemFn) -> TokenStream {
         r
     });
 
-    println!(
-        "fn({}) set gp ----------------------------------",
-        function.sig.ident
-    );
     set_gp_bounds(gps, edges);
 
     //println!("ref_nodes: {:#?}", ref_nodes);
@@ -259,50 +297,10 @@ fn macro_static_fn(args: Vec<String>, mut function: ItemFn) -> TokenStream {
     quote!(#function).into()
 }
 
-fn input_is_self(input: Option<&FnArg>) -> bool {
-    //println!("input: {:#?}", input);
-    match input {
-        Some(FnArg::Receiver(_)) => true,
-        Some(FnArg::Typed(PatType {
-            pat: box Pat::Ident(pi),
-            ..
-        })) => {
-            if pi.ident == "self" {
-                true
-            } else {
-                false
-            }
-        }
-        _ => false,
-    }
-}
-
-fn send_ref_coords(name: String, ref_nodes: Set<RefNode>) {
-    let mut ref_nodes_channels = REF_DIGRAPH_CHANNELS.lock().unwrap();
-    ref_nodes_channels.entry(name.clone()).or_insert(channel());
-    let tx = &ref_nodes_channels.get(&name.clone()).unwrap().0;
-    let ref_coords: Vec<(String, u8)> = ref_nodes
-        .iter()
-        .map(|node| (node.name.clone(), node.index as u8))
-        .collect();
-    let _ = tx.send(ref_coords);
-}
-
-fn revc_ref_coords(name: String) -> Vec<(String, u8)> {
-    let mut ref_nodes_channels = REF_DIGRAPH_CHANNELS.lock().unwrap();
-    ref_nodes_channels.entry(name.clone()).or_insert(channel());
-    let rx = &ref_nodes_channels.get(&name.clone()).unwrap().1;
-    let ref_coords = rx.recv().unwrap();
-
-    //println!("ref_coords: {:?}", ref_coords);
-
-    ref_coords
-}
-
 fn get_edges(edges: String) -> Vec<(String, u8, String, u8)> {
     let edges: String = edges.split_whitespace().collect();
     let coord_groups: Vec<&str> = edges.split("->").collect();
-    let re = Regex::new(r"((?:self\.)?[a-zA-Z_][a-zA-Z0-9_]*|self)\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)|((?:self\.)?[a-zA-Z_][a-zA-Z0-9_]*|self)|\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)").unwrap();
+    let re = Regex::new(r"((?:[a-zA-Z_][a-zA-Z0-9_]*\.)*[a-zA-Z_][a-zA-Z0-9_]*|self)\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)|((?:[a-zA-Z_][a-zA-Z0-9_]*\.)*[a-zA-Z_][a-zA-Z0-9_]*|self)|\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)").unwrap();
 
     let coord_groups: Vec<Vec<(String, u8)>> = coord_groups
         .iter()
@@ -353,7 +351,7 @@ fn set_gp_bounds(
     mut gps: HashMap<(String, u8), &mut GenericParam>,
     edges: Vec<(String, u8, String, u8)>,
 ) {
-    println!("gps: {:?}", gps.keys());
+    println!("gps keys: {:?}", gps.keys());
     println!("edges: {:?}", edges);
 
     for edge in edges {
@@ -378,50 +376,3 @@ fn set_gp_bounds(
         }
     }
 }
-
-/*
-fn get_ref_nodes(args: Vec<String>) -> RefDigraph {
-    let mut ref_nodes: RefDigraph = Set::new();
-
-    for arg in args {
-        let arg: String = arg.split_whitespace().collect();
-        let arg: Vec<&str> = arg.split("->").collect();
-
-        let mut nodes_v = vec![Set::new()];
-
-        for trs in arg {
-            let mut nodes = Set::new();
-
-            let re = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*)\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)|\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)").unwrap();
-            for cap in re.captures_iter(trs) {
-                let name = cap.get(1).map_or("Output!", |v| v.as_str());
-                let indexs: Vec<u8> = cap
-                    .get(2)
-                    .unwrap_or_else(|| cap.get(3).unwrap())
-                    .as_str()
-                    .split(",")
-                    .map(|index| index.parse().unwrap())
-                    .collect();
-
-                for index in indexs {
-                    nodes.insert((name.to_string(), index));
-                }
-            }
-
-            nodes_v.push(nodes);
-        }
-
-        for (i, nodes) in nodes_v[1..].iter().enumerate() {
-            for node1 in &nodes_v[i] {
-                let set = ref_nodes.entry(node1.clone()).or_default();
-
-                for node2 in nodes {
-                    set.insert(node2.clone());
-                }
-            }
-        }
-    }
-
-    ref_nodes
-}
-*/
