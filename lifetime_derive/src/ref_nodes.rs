@@ -1,36 +1,117 @@
-use super::{LIFETIME_COORDS_MAP};
+use super::LIFETIME_COORDS_MAP;
 use mutable_hashset::ordered_set::MutOrderedSet as Set;
 use proc_macro2::Span;
 use std::hash::{Hash, Hasher};
 use syn::punctuated::Punctuated;
 use syn::*;
 
-enum RDigrphORRnode<'a> {
-    RDigrph(*mut RDigrph<'a>),
-    RNode(RNode<'a>),
-}
-pub struct RNode<'a> {
-    pub name: String,
-    pub lf: &'a mut Lifetime,
+#[derive(Debug)]
+pub struct LifetimeNode<'a> {
+    pub lifetime: &'a mut Lifetime,
 }
 
-struct RDigrph<'a> {
+impl<'a> LifetimeNode<'a> {
+    fn new(lifetime: &'a mut Lifetime) -> Self {
+        Self { lifetime: lifetime }
+    }
+}
+
+#[derive(Debug)]
+pub struct SegmentNode<'a> {
+    pub segment: &'a mut PathSegment,
+    pub coords: Option<Vec<(String, u8)>>,
+}
+
+impl<'a> SegmentNode<'a> {
+    fn new(segment: &'a mut PathSegment) -> Self {
+        Self {
+            segment: segment,
+            coords: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ArgumentsNode<'a> {
     pub name: String,
-    pub nodes: Vec<RDigrphORRnode<'a>>,
+    pub arguments: &'a mut AngleBracketedGenericArguments,
+    pub coords: Option<Vec<(String, u8)>>,
+}
+
+impl<'a> ArgumentsNode<'a> {
+    fn new(name: String, arguments: &'a mut AngleBracketedGenericArguments) -> Self {
+        Self {
+            name: name,
+            arguments: arguments,
+            coords: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum RNode<'a> {
+    Lifetime(LifetimeNode<'a>),
+    Segment(SegmentNode<'a>),
+    Arguments(ArgumentsNode<'a>),
+}
+
+impl<'a> RNode<'a> {
+    fn new_lifetime(lifetime: &'a mut Lifetime) -> Self {
+        Self::Lifetime(LifetimeNode::new(lifetime))
+    }
+
+    fn new_segment(segment: &'a mut PathSegment) -> Self {
+        Self::Segment(SegmentNode::new(segment))
+    }
+
+    fn new_arguments(name: String, arguments: &'a mut AngleBracketedGenericArguments) -> Self {
+        Self::Arguments(ArgumentsNode::new(name, arguments))
+    }
+}
+
+#[derive(Debug)]
+pub struct RDigrph<'a> {
+    pub name: String,
+    pub nodes: Vec<RNode<'a>>,
 }
 
 impl<'a> RDigrph<'a> {
-    fn get_coords(&self) -> Vec<(String, u8)> {
+    fn new(name: String) -> Self {
+        Self {
+            name: name,
+            nodes: vec![],
+        }
+    }
+
+    pub fn get_coords(&self) -> Vec<(String, u8)> {
         let mut coords = vec![];
 
-        for (i, node) in self.nodes.iter().enumerate() {
+        // lifetime coords
+        let lifetime_node_count = self
+            .nodes
+            .iter()
+            .filter(|node| {
+                if let RNode::Lifetime(_) = node {
+                    true
+                } else {
+                    false
+                }
+            })
+            .count();
+        coords.extend((0..lifetime_node_count).map(|i| (self.name.clone(), i as u8)));
+
+        // segment coords
+        for node in self.nodes.iter() {
             match node {
-                RDigrphORRnode::RDigrph(digrph) => unsafe {
-                    coords.extend((**digrph).get_coords());
+                RNode::Segment(SegmentNode {
+                    coords: Some(cds), ..
+                }) => {
+                    coords.extend(
+                        cds.iter()
+                            .map(|cd| (format!("{}/{}", self.name, cd.0), cd.1)),
+                    );
                 }
-                RDigrphORRnode::RNode(node) => {
-                    coords.push((node.name.clone(), i as u8))
-                }
+                _ => (),
             }
         }
 
@@ -59,123 +140,90 @@ impl<'a> Hash for RefNode<'a> {
     }
 }
 
-pub enum LifetimeOrigin<'a> {
+pub enum ROrigin<'a> {
     FnInputs(&'a mut Punctuated<FnArg, Token![,]>),
     FnOutput(&'a mut ReturnType),
     StructFields(&'a mut Fields),
 }
 
-pub fn get_ref_nodes<'a>(
-    origins: Vec<LifetimeOrigin<'a>>,
-    symbol_generator: &mut SymbolGenerator,
-) -> Set<RefNode<'a>> {
-    let mut nodes = Set::new();
+pub fn get_ref_digrphs<'a>(name: String, origins: Vec<ROrigin<'a>>) -> Vec<RDigrph<'a>> {
+    let mut digrphs = vec![];
 
     for origin in origins {
         match origin {
-            LifetimeOrigin::FnInputs(inputs) => {
+            ROrigin::FnInputs(inputs) => {
                 for input in inputs.iter_mut() {
+                    let mut digrph = RDigrph::new("null".to_string());
+
                     match input {
                         FnArg::Receiver(Receiver {
                             reference: Some((_, olf)),
-                            //self_token,
                             ..
                         }) => {
-                            *olf = Some(Lifetime::new(
-                                &symbol_generator.generate(),
-                                Span::call_site(),
-                            ));
+                            *olf = Some(Lifetime::new("'null", Span::call_site()));
 
-                            nodes.insert(RefNode {
-                                name: String::from("self"),
-                                index: 0,
-                                lf: olf.as_mut().unwrap(),
-                            });
+                            digrph.name = format!("{}/{}", name, "self");
+                            digrph.nodes.push(RNode::new_lifetime(olf.as_mut().unwrap()));
                         }
                         FnArg::Typed(pt) => {
                             println!("pt: {:#?}", pt);
-                            nodes.extend(get_ref_nodes_from_type(
-                                get_name_from_pat(&pt.pat),
-                                &mut 0,
-                                &mut *pt.ty,
-                                symbol_generator,
-                            ));
+
+                            digrph.name = format!("{}/{}", name, get_name_from_pat(&pt.pat));
+                            digrph.nodes.extend(get_ref_nodes_from_type(&mut *pt.ty));
                         }
                         _ => (),
                     }
+
+                    digrphs.push(digrph);
                 }
             }
-            LifetimeOrigin::FnOutput(output) => match output {
-                ReturnType::Type(_, box ref mut ty) => {
-                    nodes.extend(get_ref_nodes_from_type(
-                        String::from("Output!"),
-                        &mut 0,
-                        ty,
-                        symbol_generator,
-                    ));
+            ROrigin::FnOutput(output) => {
+                let mut digrph = RDigrph::new(format!("{}/{}", name, "Output!"));
+
+                match output {
+                    ReturnType::Type(_, box ref mut ty) => {
+                        digrph.nodes.extend(get_ref_nodes_from_type(ty));
+                    }
+                    _ => (),
                 }
-                _ => (),
-            },
-            LifetimeOrigin::StructFields(fields) => {
+
+                digrphs.push(digrph);
+            }
+            ROrigin::StructFields(fields) => {
                 for (i, field) in fields.iter_mut().enumerate() {
-                    nodes.extend(get_ref_nodes_from_type(
-                        format!(
-                            "self.{}",
-                            field
-                                .ident
-                                .as_ref()
-                                .map_or(i.to_string(), |ident| ident.to_string())
-                        ),
-                        &mut 0,
-                        &mut field.ty,
-                        symbol_generator,
-                    ));
+                    let field_name = field
+                        .ident
+                        .as_ref()
+                        .map_or(i.to_string(), |ident| ident.to_string());
+                    let mut digrph = RDigrph::new(format!("{}/{}", name, field_name));
+
+                    digrph.nodes.extend(get_ref_nodes_from_type(&mut field.ty));
+
+                    digrphs.push(digrph);
                 }
             }
         }
     }
 
-    nodes
+    digrphs
 }
 
-fn get_ref_nodes_from_type<'a>(
-    name: String,
-    index: &mut u8,
-    ty: &'a mut Type,
-    symbol_generator: &mut SymbolGenerator,
-) -> Set<RefNode<'a>> {
+fn get_ref_nodes_from_type<'a>(ty: &'a mut Type) -> Vec<RNode<'a>> {
     //println!("ty: {:#?}", ty);
-    let mut nodes = Set::new();
+    let mut nodes = vec![];
 
     match ty {
         Type::Reference(ref mut tr) => {
-            tr.lifetime = Some(Lifetime::new(
-                &symbol_generator.generate(),
-                Span::call_site(),
-            ));
+            tr.lifetime = Some(Lifetime::new("'null", Span::call_site()));
 
-            nodes.insert(RefNode {
-                name: name.clone(),
-                index: *index,
-                lf: tr.lifetime.as_mut().unwrap(),
-            });
-            *index += 1;
-
-            nodes.extend(get_ref_nodes_from_type(
-                name.clone(),
-                index,
-                &mut *tr.elem,
-                symbol_generator,
+            nodes.push(RNode::new_lifetime(
+                tr.lifetime.as_mut().unwrap(),
             ));
+            nodes.extend(get_ref_nodes_from_type(&mut *tr.elem));
         }
         Type::Tuple(ref mut tt) => {
             for elem in tt.elems.iter_mut() {
-                nodes.extend(get_ref_nodes_from_type(
-                    name.clone(),
-                    index,
-                    elem,
-                    symbol_generator,
-                ));
+                nodes.extend(get_ref_nodes_from_type(elem));
             }
         }
         Type::Path(TypePath {
@@ -184,20 +232,10 @@ fn get_ref_nodes_from_type<'a>(
             ..
         }) => {
             if let Some(qself) = qself {
-                nodes.extend(get_ref_nodes_from_type(
-                    name.clone(),
-                    index,
-                    &mut *qself.ty,
-                    symbol_generator,
-                ));
+                nodes.extend(get_ref_nodes_from_type(&mut *qself.ty));
             }
 
-            nodes.extend(get_ref_nodes_from_path(
-                name.clone(),
-                index,
-                pt,
-                symbol_generator,
-            ));
+            nodes.extend(get_ref_nodes_from_path(pt));
         }
         _ => {
             //println!("ty: {:#?}", ty);
@@ -222,20 +260,10 @@ fn get_ref_nodes_from_type<'a>(
     nodes
 }
 
-fn get_ref_nodes_from_path<'a>(
-    name: String,
-    index: &mut u8,
-    path: &'a mut Path,
-    symbol_generator: &mut SymbolGenerator,
-) -> Set<RefNode<'a>> {
-    println!("name: {}", name);
-    println!("path: {:#?}\nident:{:?}", path, path.get_ident());
-    
-    let mut nodes = Set::new();
+fn get_ref_nodes_from_path<'a>(path: &'a mut Path) -> Vec<RNode<'a>> {
+    let mut nodes = vec![];
 
-    let segments_coords = set_path_lfs_and_get_coords(path, symbol_generator);
-
-    for (segment, coords) in path.segments.iter_mut().zip(segments_coords) {
+    for segment in path.segments.iter_mut() {
         match segment.arguments {
             PathArguments::AngleBracketed(AngleBracketedGenericArguments {
                 ref mut args, ..
@@ -243,20 +271,10 @@ fn get_ref_nodes_from_path<'a>(
                 for arg in args {
                     match arg {
                         GenericArgument::Type(ref mut ty) => {
-                            nodes.extend(get_ref_nodes_from_type(
-                                format!("{}", name),
-                                index,
-                                ty,
-                                symbol_generator,
-                            ));
+                            nodes.extend(get_ref_nodes_from_type(ty));
                         }
                         GenericArgument::Binding(Binding { ref mut ty, .. }) => {
-                            nodes.extend(get_ref_nodes_from_type(
-                                name.clone(),
-                                index,
-                                ty,
-                                symbol_generator,
-                            ));
+                            nodes.extend(get_ref_nodes_from_type(ty));
                         }
                         GenericArgument::Constraint(Constraint { ref mut bounds, .. }) => {
                             for bound in bounds {
@@ -264,28 +282,19 @@ fn get_ref_nodes_from_path<'a>(
                                     TypeParamBound::Trait(TraitBound {
                                         path: ref mut pt, ..
                                     }) => {
-                                        nodes.extend(get_ref_nodes_from_path(
-                                            name.clone(),
-                                            index,
-                                            pt,
-                                            symbol_generator,
-                                        ));
+                                        nodes.extend(get_ref_nodes_from_path(pt));
                                     }
                                     _ => (),
                                 }
                             }
                         }
                         GenericArgument::Lifetime(lf) => {
-                            nodes.insert(RefNode {
-                                name: name.clone(),
-                                index: *index,
-                                lf: lf,
-                            });
-                            *index += 1;
+                            nodes.push(RNode::new_lifetime(lf));
                         }
-                        _ => (), /*
-                                 GenericArgument::Const(_) => {}
-                                 */
+                        _ => (),
+                        /*
+                        GenericArgument::Const(_) => {}
+                        */
                     }
                 }
             }
@@ -295,31 +304,25 @@ fn get_ref_nodes_from_path<'a>(
                 ..
             }) => {
                 for input in inputs {
-                    nodes.extend(get_ref_nodes_from_type(
-                        name.clone(),
-                        index,
-                        input,
-                        symbol_generator,
-                    ));
+                    nodes.extend(get_ref_nodes_from_type(input));
                 }
 
                 if let ReturnType::Type(_, box ref mut ty) = output {
-                    nodes.extend(get_ref_nodes_from_type(
-                        name.clone(),
-                        index,
-                        ty,
-                        symbol_generator,
-                    ));
+                    nodes.extend(get_ref_nodes_from_type(ty));
                 }
             }
-            PathArguments::None => {}
+            _ => (),
         }
     }
 
     nodes
 }
 
-fn set_path_lfs_and_get_coords(pt: &mut Path, symbol_generator: &mut SymbolGenerator) -> Vec<Option<Vec<(String, u8)>>>{
+/*
+fn set_path_lfs_and_get_coords(
+    pt: &mut Path,
+    symbol_generator: &mut SymbolGenerator,
+) -> Vec<Option<Vec<(String, u8)>>> {
     let mut segments_coords = vec![];
 
     for segment in pt.segments.iter_mut() {
@@ -361,6 +364,7 @@ fn set_path_lfs_and_get_coords(pt: &mut Path, symbol_generator: &mut SymbolGener
 
     segments_coords
 }
+*/
 
 fn get_name_from_pat(pat: &Pat) -> String {
     match pat {
@@ -369,62 +373,5 @@ fn get_name_from_pat(pat: &Pat) -> String {
         Pat::Reference(PatReference { box ref pat, .. }) => get_name_from_pat(pat),
         Pat::Type(PatType { box ref pat, .. }) => get_name_from_pat(pat),
         _ => unreachable!(),
-    }
-}
-
-pub fn set_lifetime_coords(name: String, ref_nodes: Set<RefNode>) {
-    let mut lifetime_coords_map = LIFETIME_COORDS_MAP.lock().unwrap();
-    //let coords = lifetime_coords_map.get(&name.clone()).unwrap();
-    let lifetime_coords: Vec<(String, u8)> = ref_nodes
-        .iter()
-        .map(|node| (node.name.clone(), node.index as u8))
-        .collect();
-
-    println!("[{}] set lifetime coords: {:?}", name, lifetime_coords);
-    lifetime_coords_map.insert(name.clone(), lifetime_coords);
-}
-
-pub fn get_lifetime_coords(name: String) -> Option<Vec<(String, u8)>> {
-    let lifetime_coords_map = LIFETIME_COORDS_MAP.lock().unwrap();
-    let lifetime_coords = lifetime_coords_map.get(&name.clone()).map(|v| (*v).clone());
-
-    println!("[{}] get lifetime coords: {:?}", name, lifetime_coords);
-    lifetime_coords
-}
-
-pub struct SymbolGenerator {
-    perfix: String,
-    letter: char,
-    number: u8,
-}
-
-impl SymbolGenerator {
-    pub fn new(perfix: String) -> Self {
-        SymbolGenerator {
-            perfix: perfix,
-            letter: 'a',
-            number: 0,
-        }
-    }
-
-    pub fn generate(&mut self) -> String {
-        let symbol = if self.number == 0 {
-            format!("'{}{}", self.perfix, self.letter)
-        } else {
-            format!("'{}{}{}", self.perfix, self.letter, self.number)
-        };
-
-        if self.letter == 'z' {
-            self.letter = 'a';
-            self.number += 1;
-        } else {
-            self.letter = (self.letter as u8 + 1) as char;
-        }
-
-        symbol
-    }
-
-    pub fn generate_n(&mut self, n: u8) -> Vec<String> {
-        (0..n).map(|_| self.generate()).collect()
     }
 }

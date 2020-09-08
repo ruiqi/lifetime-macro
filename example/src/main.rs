@@ -198,6 +198,7 @@ struct GGG<G> {
     g: &&G,
 }
 
+/*
 #[lifetime()]
 struct Context<T, G> {
     t: &T,
@@ -209,7 +210,13 @@ struct Parser<T, G> {
     t: &T,
     context: &Context<T, G>,
 }
+*/
 
+struct XX<'a, 'b, 'c> {
+    x: GGG<'a, 'b, &'c str>,
+}
+
+/*
 #[lifetime()]
 impl<T, G>
     Parser<T, G>
@@ -239,6 +246,7 @@ impl<T, G>
         }.parse()
     }
 }
+*/
 
 /*
 //#[lifetime()]
@@ -258,7 +266,7 @@ impl<'a, 'b, 'c: 'g, 'd: 'h, 'e: 'i, 'f, 'g, 'h, 'i, 'j: 'p, 'k: 'q, 'l: 'r, 'p,
     Parser<'a, 'b, 'c, 'd, 'e, T, G>
 {
     //#[lifetime(
-    //    "self.context(1) -> (0)",
+    //    "self.context.t(0) -> (0)",
     //    "self.context.e.g(0) -> (1)",
     //    "self.context.e.g(1) -> (2)",
     //)]
