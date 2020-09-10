@@ -9,7 +9,7 @@ use proc_macro::TokenStream;
 use proc_macro2::{Group, Span, TokenTree};
 use quote::quote;
 use ref_nodes::{get_ref_digrphs, RDigrph, RNode, ROrigin};
-use regex::Regex;
+use regex::{Captures, Regex};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use syn::*;
@@ -40,7 +40,7 @@ pub fn lifetime(args: TokenStream, input: TokenStream) -> TokenStream {
                 })
                 .collect();
 
-            macro_static_fn(args, function)
+            macro_fn(args, function)
         }
         _ => unreachable!(),
         /*
@@ -61,11 +61,6 @@ pub fn lifetime(args: TokenStream, input: TokenStream) -> TokenStream {
         Item::__Nonexhaustive => {}
         */
     }
-}
-
-#[proc_macro_attribute]
-pub fn lifetime_nothing(_: TokenStream, input: TokenStream) -> TokenStream {
-    input
 }
 
 fn macro_struct(mut structure: ItemStruct) -> TokenStream {
@@ -100,42 +95,51 @@ fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
         }) => {
             for segment in segments.iter_mut() {
                 let name = segment.ident.to_string();
-                let cds = get_lifetime_coords(name);
+                let cds = get_lifetime_coords(name.clone());
 
-                if let Some(cds) = cds {
-                    let symbols = symbol_generator.generate_n(cds.len() as u8);
-                    for symbol in symbols {
-                        // implementation generics lifetime
-                        let lt = LifetimeDef::new(Lifetime::new(&symbol, Span::call_site()));
-                        implementation.generics.params.push(GenericParam::from(lt));
+                if cds.is_none() {
+                    continue;
+                }
 
-                        // structure generics lifetime
-                        if let PathArguments::None = segment.arguments {
-                            segment.arguments =
-                                PathArguments::AngleBracketed(AngleBracketedGenericArguments {
-                                    colon2_token: None,
-                                    lt_token: token::Lt {
-                                        spans: [Span::call_site(); 1],
-                                    },
-                                    args: punctuated::Punctuated::new(),
-                                    gt_token: token::Gt {
-                                        spans: [Span::call_site(); 1],
-                                    },
-                                })
-                        }
+                let re = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*/").unwrap();
+                let cds: Vec<(String, u8)> = cds
+                    .unwrap()
+                    .iter()
+                    .map(|cd| (re.replace(cd.0.as_str(), "self.").to_string(), cd.1))
+                    .collect();
 
-                        if let PathArguments::AngleBracketed(AngleBracketedGenericArguments {
-                            ref mut args,
-                            ..
-                        }) = segment.arguments
-                        {
-                            let lt = Lifetime::new(&symbol, Span::call_site());
-                            args.push(GenericArgument::Lifetime(lt));
-                        }
+                let symbols = symbol_generator.generate_n(cds.len() as u8);
+                for symbol in symbols {
+                    // implementation generics lifetime
+                    let lt = LifetimeDef::new(Lifetime::new(&symbol, Span::call_site()));
+                    implementation.generics.params.push(GenericParam::from(lt));
+
+                    // structure generics lifetime
+                    if let PathArguments::None = segment.arguments {
+                        segment.arguments =
+                            PathArguments::AngleBracketed(AngleBracketedGenericArguments {
+                                colon2_token: None,
+                                lt_token: token::Lt {
+                                    spans: [Span::call_site(); 1],
+                                },
+                                args: punctuated::Punctuated::new(),
+                                gt_token: token::Gt {
+                                    spans: [Span::call_site(); 1],
+                                },
+                            })
                     }
 
-                    coords.extend(cds);
+                    if let PathArguments::AngleBracketed(AngleBracketedGenericArguments {
+                        ref mut args,
+                        ..
+                    }) = segment.arguments
+                    {
+                        let lt = Lifetime::new(&symbol, Span::call_site());
+                        args.push(GenericArgument::Lifetime(lt));
+                    }
                 }
+
+                coords.extend(cds);
             }
         }
         _ => (),
@@ -147,54 +151,38 @@ fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
             ImplItem::Method(iim) => {
                 let name = iim.sig.ident.to_string();
 
-                for attr in iim.attrs.iter_mut() {
-                    //println!("attr: {:#?}", attr);
+                // edges
+                for attr in iim.attrs.iter() {
                     if attr.path.segments[0].ident.to_string() == "lifetime" {
-                        attr.path.segments[0].ident =
-                            Ident::new("lifetime_nothing", Span::call_site());
-
-                        //println!("attr.tokens: {:#?}", attr.tokens);
                         let group: Group = syn::parse2(attr.tokens.clone()).unwrap();
                         for token in group.stream() {
                             if let TokenTree::Literal(li) = token {
-                                edges.extend(
-                                    get_edges(li.to_string().trim_matches('"').to_string())
-                                        .into_iter()
-                                        .map(|edge| {
-                                            (
-                                                if edge.0.starts_with("self.") {
-                                                    edge.0
-                                                } else {
-                                                    format!("{}/{}", name, edge.0)
-                                                },
-                                                edge.1,
-                                                if edge.2.starts_with("self.") {
-                                                    edge.2
-                                                } else {
-                                                    format!("{}/{}", name, edge.2)
-                                                },
-                                                edge.3,
-                                            )
-                                        }),
-                                );
+                                edges.extend(get_edges(
+                                    name.clone(),
+                                    li.to_string().trim_matches('"').to_string(),
+                                ));
                             }
                         }
                     }
                 }
 
+                // remove instance lifetime macro
+                iim.attrs.retain(|attr| attr.path.segments[0].ident.to_string() != "lifetime");
+
+                // set lifetime symbols
                 let origins = vec![
                     ROrigin::FnInputs(&mut iim.sig.inputs),
                     ROrigin::FnOutput(&mut iim.sig.output),
                 ];
                 let mut digrphs = get_ref_digrphs(name, origins);
+                set_lifetime_symbols(&mut implementation.generics, &mut digrphs, symbol_generator);
 
+                // coords
                 let cds = digrphs.iter().fold(vec![], |mut cds, digrph| {
                     cds.extend(digrph.get_coords());
                     cds
                 });
                 coords.extend(cds);
-
-                set_lifetime_symbols(&mut implementation.generics, &mut digrphs, symbol_generator);
             }
             _ => unreachable!(),
             /*
@@ -227,11 +215,7 @@ fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
     quote!(#implementation).into()
 }
 
-fn macro_instance_fn(mut function: ItemFn) -> TokenStream {
-    quote!(#function).into()
-}
-
-fn macro_static_fn(args: Vec<String>, mut function: ItemFn) -> TokenStream {
+fn macro_fn(args: Vec<String>, mut function: ItemFn) -> TokenStream {
     let symbol_generator = &mut SymbolGenerator::new(String::from("f_"));
 
     let name = function.sig.ident.to_string();
@@ -239,8 +223,9 @@ fn macro_static_fn(args: Vec<String>, mut function: ItemFn) -> TokenStream {
         ROrigin::FnInputs(&mut function.sig.inputs),
         ROrigin::FnOutput(&mut function.sig.output),
     ];
-    let mut digrphs = get_ref_digrphs(name, origins);
+    let mut digrphs = get_ref_digrphs(name.clone(), origins);
 
+    set_lifetime_symbols(&mut function.sig.generics, &mut digrphs, symbol_generator);
 
     let coords = digrphs.iter().fold(vec![], |mut coords, digrph| {
         coords.extend(digrph.get_coords());
@@ -248,11 +233,9 @@ fn macro_static_fn(args: Vec<String>, mut function: ItemFn) -> TokenStream {
     });
     let mut gps = HashMap::new();
     let edges = args.into_iter().fold(vec![], |mut r, arg| {
-        r.extend(get_edges(arg));
+        r.extend(get_edges(name.clone(), arg));
         r
     });
-
-    set_lifetime_symbols(&mut function.sig.generics, &mut digrphs, symbol_generator);
 
     for (coord, gp) in
         coords.into_iter().zip(
@@ -277,21 +260,22 @@ fn macro_static_fn(args: Vec<String>, mut function: ItemFn) -> TokenStream {
     quote!(#function).into()
 }
 
-fn get_edges(edges: String) -> Vec<(String, u8, String, u8)> {
-    let edges: String = edges.split_whitespace().collect();
-    let coord_groups: Vec<&str> = edges.split("->").collect();
-    let re = Regex::new(r"((?:[a-zA-Z_][a-zA-Z0-9_]*\.)*[a-zA-Z_][a-zA-Z0-9_]*|self)\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)|((?:[a-zA-Z_][a-zA-Z0-9_]*\.)*[a-zA-Z_][a-zA-Z0-9_]*|self)|\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)").unwrap();
+fn get_edges(namespace: String, edges: String) -> Vec<(String, u8, String, u8)> {
+    let re = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\[[a-zA-Z_][a-zA-Z0-9_]*(?:,(?:[1-9]\d*|0))?\])*)\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)|([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\[[a-zA-Z_][a-zA-Z0-9_]*(?:,(?:[1-9]\d*|0))?\])*)|\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)").unwrap();
 
-    let coord_groups: Vec<Vec<(String, u8)>> = coord_groups
-        .iter()
-        .map(|&coord_group| {
+    let coord_groups = edges
+        .split_whitespace()
+        .collect::<String>()
+        .split("->")
+        .map(|coord_group| {
             re.captures_iter(coord_group).fold(vec![], |mut r, caps| {
-                //println!("caps: {:?}", caps);
                 let name = caps
                     .get(1)
                     .or(caps.get(3))
                     .map_or("Output!", |cap| cap.as_str());
-                //println!("name: {}", name);
+                let name = Regex::new(r"\[([^,\[\]]+)\]")
+                    .unwrap()
+                    .replace(name, |caps: &Captures| format!("[{},0]", &caps[1]));
 
                 let indexs: Vec<u8> = caps.get(2).or(caps.get(4)).map_or(vec![0], |cap| {
                     cap.as_str()
@@ -299,7 +283,6 @@ fn get_edges(edges: String) -> Vec<(String, u8, String, u8)> {
                         .map(|i| i.parse().unwrap())
                         .collect()
                 });
-                //println!("indexs: {:?}", indexs);
 
                 r.extend(
                     indexs
@@ -309,20 +292,30 @@ fn get_edges(edges: String) -> Vec<(String, u8, String, u8)> {
                 r
             })
         })
-        .collect();
+        .collect::<Vec<Vec<(String, u8)>>>();
 
     let mut edges = vec![];
 
     for (i, coord_group) in (&coord_groups[1..]).iter().enumerate() {
         for coord_b in coord_group {
             for coord_a in &coord_groups[i] {
-                edges.push((coord_a.0.clone(), coord_a.1, coord_b.0.clone(), coord_b.1));
+                edges.push((
+                    if coord_a.0.starts_with("self.") {
+                        coord_a.0.clone()
+                    } else {
+                        format!("{}/{}", namespace, coord_a.0)
+                    },
+                    coord_a.1,
+                    if coord_b.0.starts_with("self.") {
+                        coord_b.0.clone()
+                    } else {
+                        format!("{}/{}", namespace, coord_b.0)
+                    },
+                    coord_b.1,
+                ));
             }
         }
     }
-
-    //println!("edges: {:?}", edges);
-    //println!("\n");
 
     edges
 }
@@ -339,13 +332,13 @@ fn set_lifetime_bounds(
         let gp_b = gps.get(&(edge.2, edge.3)).unwrap();
         match gp_b {
             GenericParam::Lifetime(ref lf_def_b) => {
-                println!("lf_def_b: {:?}", lf_def_b);
+                //println!("lf_def_b: {:?}", lf_def_b);
                 let symbol = format!("'{}", lf_def_b.lifetime.ident);
 
                 let gp_a = gps.get_mut(&(edge.0, edge.1)).unwrap();
                 match gp_a {
                     GenericParam::Lifetime(ref mut lf_def_a) => {
-                        println!("lf_def_a: {:?}", lf_def_a);
+                        //println!("lf_def_a: {:?}", lf_def_a);
                         let lf = Lifetime::new(&symbol, Span::call_site());
                         lf_def_a.bounds.push(lf);
                     }
@@ -365,7 +358,7 @@ fn set_lifetime_coords(name: String, digrphs: &Vec<RDigrph>) {
         coords
     });
 
-    println!("[{}] set lifetime coords: {:?}", name, coords);
+    //println!("[{}] set lifetime coords: {:?}", name, coords);
     lifetime_coords_map.insert(name, coords);
 }
 
@@ -373,7 +366,7 @@ fn get_lifetime_coords(name: String) -> Option<Vec<(String, u8)>> {
     let lifetime_coords_map = LIFETIME_COORDS_MAP.lock().unwrap();
     let lifetime_coords = lifetime_coords_map.get(&name.clone()).map(|v| (*v).clone());
 
-    println!("[{}] get lifetime coords: {:?}", name, lifetime_coords);
+    //println!("[{}] get lifetime coords: {:?}", name, lifetime_coords);
     lifetime_coords
 }
 
@@ -419,49 +412,63 @@ fn set_lifetime_symbols(
     digrphs: &mut Vec<RDigrph>,
     symbol_generator: &mut SymbolGenerator,
 ) {
-    /*
-    let (prefix, generics) = match item {
-        Item::Struct(structure) => ("'s_".to_string(), &structure.generics),
-        Item::Fn(function) => ("'f_".to_string(), &function.sig.generics),
-        Item::Impl(implementation) => ("'i_".to_string(), &implementation.generics),
-        _ => unreachable!(),
-    };
-    */
-
-    //let symbol_generator = SymbolGenerator::new(prefix);
-
     for digrph in digrphs.iter_mut() {
         for node in digrph.nodes.iter_mut() {
             match node {
-                RNode::Lifetime(node) => {
+                RNode::Lifetime(node) => unsafe {
                     let symbol = symbol_generator.generate();
 
                     // refercence lifetime
-                    node.lifetime.ident = Ident::new(&symbol[1..], Span::call_site());
+                    (*node.lifetime).ident = Ident::new(&symbol[1..], Span::call_site());
 
                     // generics lifetime
                     let lt = LifetimeDef::new(Lifetime::new(symbol.as_str(), Span::call_site()));
                     generics.params.push(GenericParam::from(lt));
-                }
-                RNode::Segment(node) => {
-                    let name = node.segment.ident.to_string();
-                    println!("segment node[{}]: {:?}", name, node);
+                },
+                RNode::Segment(node) => unsafe {
+                    let name = (*node.segment).ident.to_string();
 
                     match get_lifetime_coords(name.clone()) {
                         Some(coords) => {
-                            println!("{}: {:?}", name, coords);
-
-                            for _ in coords {
+                            for _ in coords.iter() {
                                 let symbol = symbol_generator.generate();
 
+                                // arguments lifetime
+                                if let PathArguments::None = (*node.segment).arguments {
+                                    (*node.segment).arguments = PathArguments::AngleBracketed(
+                                        AngleBracketedGenericArguments {
+                                            colon2_token: None,
+                                            lt_token: token::Lt {
+                                                spans: [Span::call_site(); 1],
+                                            },
+                                            args: punctuated::Punctuated::new(),
+                                            gt_token: token::Gt {
+                                                spans: [Span::call_site(); 1],
+                                            },
+                                        },
+                                    )
+                                }
+                                if let PathArguments::AngleBracketed(
+                                    AngleBracketedGenericArguments { ref mut args, .. },
+                                ) = (*node.segment).arguments
+                                {
+                                    let lt = Lifetime::new(&symbol, Span::call_site());
+                                    args.push(GenericArgument::Lifetime(lt));
+                                }
+
                                 // generics lifetime
-                                let lt = LifetimeDef::new(Lifetime::new(symbol.as_str(), Span::call_site()));
+                                let lt = LifetimeDef::new(Lifetime::new(
+                                    symbol.as_str(),
+                                    Span::call_site(),
+                                ));
                                 generics.params.push(GenericParam::from(lt));
                             }
+
+                            node.coords = Some(coords);
                         }
                         None => (),
                     }
-                }
+                },
             }
         }
     }

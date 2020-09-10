@@ -1,8 +1,7 @@
-use lifetime_derive::{lifetime, lifetime_nothing};
+use lifetime_derive::{lifetime};
 
 fn main() {}
 
-/*
 #[lifetime("x, y -> (0), (1)")]
 fn demo1<T, U: PartialOrd>(x: &T, y: &T, z1: &U, z2: &U) -> (&T, &T) {
     if z1 >= z2 {
@@ -76,42 +75,26 @@ struct Demo5<G, R> {
 
 #[lifetime()]
 impl<G, R> Demo5<G, R> {
-    #[lifetime(
-        "x -> self.x",
-        "y -> self.y",
-        "z -> self.z",
-    )]
-    fn demo5_0(x: &G, y: &G, z: &R) -> Self  {
+    #[lifetime("x -> self.x", "y -> self.y", "z -> self.z")]
+    fn demo5_0(x: &G, y: &G, z: &R) -> Self {
         Self { x: x, y: y, z: z }
     }
 
-    #[lifetime(
-        "x -> self.x",
-        "y -> self.y",
-        "z -> self.z",
-    )]
-    fn demo5_1(x: &G, y: &G, z: &R) -> i64  {
+    #[lifetime("x -> self.x", "y -> self.y", "z -> self.z")]
+    fn demo5_1(x: &G, y: &G, z: &R) -> i64 {
         Self { x: x, y: y, z: z };
 
         18
     }
 
-    #[lifetime(
-        "self -> (0)",
-        "x -> self.x",
-        "z -> self.z",
-    )]
+    #[lifetime("self -> (0)", "x -> self.x", "z -> self.z")]
     fn demo5_2(&mut self, x: &G, z: &R) -> &Self {
         self.x = x;
         self.z = z;
         self
     }
 
-    #[lifetime(
-        "x -> self.x -> (0)",
-        "y -> self.y -> (0)",
-        "z -> self.z",
-    )]
+    #[lifetime("x -> self.x -> (0)", "y -> self.y -> (0)", "z -> self.z")]
     fn demo5_3(&mut self, x: &G, y: &G, z: &R) -> &G {
         self.x = x;
         self.y = y;
@@ -129,7 +112,7 @@ impl<G, R> Demo5<G, R> {
         "x -> self.x -> (1)",
         "y -> self.y",
         "z -> self.z",
-        "o -> (2)",
+        "o -> (2)"
     )]
     fn demo5_5(&mut self, x: &G, y: &G, z: &R, o: &G) -> (&Self, &G, &G) {
         self.x = x;
@@ -171,11 +154,7 @@ impl<G> Deom6<G> {
         }
     }
 
-    #[lifetime(
-        "x -> self.x -> (0)",
-        "y -> self.y -> (0)",
-        "z -> self.z -> (0)",
-    )]
+    #[lifetime("x -> self.x -> (0)", "y -> self.y -> (0)", "z -> self.z -> (0)")]
     fn demo6_2(&self, x: &G, y: &G, z: &G, o: i64) -> &G {
         let temp = Self { x: x, y: y, z: z };
 
@@ -191,14 +170,12 @@ impl<G> Deom6<G> {
         }
     }
 }
-*/
 
 #[lifetime()]
 struct GGG<G> {
     g: &&G,
 }
 
-/*
 #[lifetime()]
 struct Context<T, G> {
     t: &T,
@@ -210,21 +187,13 @@ struct Parser<T, G> {
     t: &T,
     context: &Context<T, G>,
 }
-*/
 
-struct XX<'a, 'b, 'c> {
-    x: GGG<'a, 'b, &'c str>,
-}
-
-/*
 #[lifetime()]
-impl<T, G>
-    Parser<T, G>
-{
+impl<T, G> Parser<T, G> {
     #[lifetime(
-        "self.context(1) -> (0)",
-        "self.context.e.g(0) -> (1)",
-        "self.context.e.g(1) -> (2)",
+        "self.context[Context,0].t(0) -> (0)",
+        "self.context[Context,0].e[GGG,0].g(0) -> (1)",
+        "self.context[Context,0].e[GGG,0].g(1) -> (2)"
     )]
     fn parse(&self) -> Result<(), (&T, &&G)> {
         if self.context.e.is_ok() {
@@ -235,86 +204,21 @@ impl<T, G>
     }
 
     #[lifetime(
-        "context1.t(0) -> (0)",
-        "context1.u.g(0) -> (1)",
-        "context1.u.g(1) -> (2)",
+        "context1[Context].t(0) -> (0)",
+        "context1[Context,0].e[GGG,0].g(0) -> (1)",
+        "context1[Context,0].e[GGG].g(1) -> (2)"
     )]
     fn parse_context(t: T, context1: Context<T, G>) -> Result<(), (&T, &&G)> {
         Parser {
             t: &t,
-            context: &context1
-        }.parse()
-    }
-}
-*/
-
-/*
-//#[lifetime()]
-struct Context<'a, 'b, 'c, T, G> {
-    t: &'a T,
-    e: Result<GGG<'b, 'c, G>, ()>,
-}
-
-//#[lifetime()]
-struct Parser<'a, 'b, 'c, 'd, 'e, T, G> {
-    t: &'a T,
-    context: &'b Context<'c, 'd, 'e, T, G>,
-}
-
-//#[lifetime()]
-impl<'a, 'b, 'c: 'g, 'd: 'h, 'e: 'i, 'f, 'g, 'h, 'i, 'j: 'p, 'k: 'q, 'l: 'r, 'p, 'q, 'r, T, G>
-    Parser<'a, 'b, 'c, 'd, 'e, T, G>
-{
-    //#[lifetime(
-    //    "self.context.t(0) -> (0)",
-    //    "self.context.e.g(0) -> (1)",
-    //    "self.context.e.g(1) -> (2)",
-    //)]
-    fn parse(&'f self) -> Result<(), (&'g T, &'h &'i G)> {
-        if self.context.e.is_ok() {
-            Err((self.context.t, self.context.e.as_ref().ok().unwrap().g))
-        } else {
-            unreachable!()
+            context: &context1,
         }
-    }
-
-    //#[lifetime(
-    //    "context1.t(0) -> (0)",
-    //    "context1.u.g(0) -> (1)",
-    //    "context1.u.g(1) -> (2)",
-    //)]
-    fn parse_context(t: T, context1: Context<'j, 'k, 'l, T, G>) -> Result<(), (&'p T, &'q &'r G)> {
-        Parser {
-            t: &t,
-            context: &context1
-        }.parse()
+        .parse()
     }
 }
-*/
 
-/*
-struct XContext<'a>(&'a str);
-
-struct XParser<'a, 'b> {
-    context: &'a XContext<'b>,
-}
-
-impl<'a, 'b: 'd, 'c, 'd, 'e: 'f, 'f> XParser<'a, 'b> {
-    // self.context(1) -> (0)
-    fn xparse(&'c self) -> Result<(), &'d str> {
-        Err(&self.context.0[1..])
-    }
-
-    // context.s(0) -> (0)
-    fn xparse_context(context: XContext<'e>) -> Result<(), &'f str> {
-        XParser { context: &context }.xparse()
-    }
-}
-*/
-
-/*
-#[lifetime()]
-fn test1(x: &T, y: &T, z: &T) -> &T {
+#[lifetime("x, y, z -> (0)")]
+fn test1<T>(x: &T, y: &T, z: &T) -> &T {
     let n = 3;
     match n {
         1 => x,
@@ -323,9 +227,7 @@ fn test1(x: &T, y: &T, z: &T) -> &T {
         _ => unreachable!(),
     }
 }
-*/
 
-/*
 #[lifetime()]
 struct Test2<T> {
     x: &T,
@@ -387,10 +289,7 @@ impl<T> Test2<T> {
         }
     }
 
-    #[lifetime(
-        "self.x -> self.z",
-        "self.z -> self.x",
-    )]
+    #[lifetime("self.x -> self.z", "self.z -> self.x")]
     fn test2_5(&mut self) {
         let temp = self.x;
         self.x = self.z;
@@ -405,7 +304,7 @@ impl<T> Test2<T> {
         "y -> (1)"
         "y(1) -> (2)"
     )]
-    fn test2_6(mut self: Self, x: &T, y: &&T) -> (Self, &T, &&T){
+    fn test2_6(mut self: Self, x: &T, y: &&T) -> (Self, &T, &&T) {
         self.x = x;
         self.y = y;
 
@@ -417,22 +316,3 @@ impl<T> Test2<T> {
         }
     }
 }
-*/
-
-/*
-struct Test3 {
-    x: Option<&Self>,
-}
-
-impl<, 2: > Test3 {
-    //fn test3_1<1: >(&1 mut self) {
-    //    self.x = Some(self);
-    //}
-
-    fn test3_2(&mut self, t: &2 Test3) {
-        self.x = Some(t);
-    }
-}
-*/
-
-//struct Test4 {}
