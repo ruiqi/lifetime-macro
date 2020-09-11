@@ -62,32 +62,26 @@ impl RDigrph {
 
     pub fn get_coords(&self) -> Vec<(String, u8)> {
         let mut coords = vec![];
+        let mut index_counters = HashMap::new();
 
-        // lifetime coords
-        let lifetime_node_count = self
-            .nodes
-            .iter()
-            .filter(|node| {
-                if let RNode::Lifetime(_) = node {
-                    true
-                } else {
-                    false
-                }
-            })
-            .count();
-        coords.extend((0..lifetime_node_count).map(|i| (self.name.clone(), i as u8)));
-
-        // segment coords
-        let mut segment_indexs = HashMap::new();
         for node in self.nodes.iter() {
             match node {
+                // lifetime coords
+                RNode::Lifetime(_) => {
+                    let index = index_counters.entry("".to_string()).or_insert(-1);
+                    *index += 1;
+
+                    coords.push((self.name.clone(), *index as u8));
+                }
+                
+                // segment coords
                 RNode::Segment(SegmentNode {
                     segment,
                     coords: Some(cds),
                     ..
                 }) => unsafe {
                     let name = (**segment).ident.to_string();
-                    let index = segment_indexs.entry(name.clone()).or_insert(-1);
+                    let index = index_counters.entry(name.clone()).or_insert(-1);
                     *index += 1;
                     let re = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*/").unwrap();
 
@@ -115,9 +109,10 @@ impl RDigrph {
 }
 
 pub enum ROrigin<'a> {
-    FnInputs(&'a mut Punctuated<FnArg, Token![,]>),
+    FnInputs(&'a mut Punctuated<FnArg, token::Comma>),
     FnOutput(&'a mut ReturnType),
     StructFields(&'a mut Fields),
+    EnumVariants(&'a mut Punctuated<Variant, token::Comma>),
 }
 
 pub fn get_ref_digrphs<'a>(name: String, origins: Vec<ROrigin<'a>>) -> Vec<RDigrph> {
@@ -172,6 +167,17 @@ pub fn get_ref_digrphs<'a>(name: String, origins: Vec<ROrigin<'a>>) -> Vec<RDigr
                     let mut digrph = RDigrph::new(format!("{}/{}", name, field_name));
 
                     digrph.nodes.extend(get_ref_nodes_from_type(&mut field.ty));
+
+                    digrphs.push(digrph);
+                }
+            }
+            ROrigin::EnumVariants(variants) => {
+                for variant in variants.iter_mut() {
+                    let mut digrph = RDigrph::new(format!("{}/{}", name, variant.ident));
+
+                    for field in variant.fields.iter_mut() {
+                        digrph.nodes.extend(get_ref_nodes_from_type(&mut field.ty));
+                    }
 
                     digrphs.push(digrph);
                 }

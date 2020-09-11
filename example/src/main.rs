@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use lifetime_derive::{lifetime};
 
 fn main() {}
@@ -313,6 +315,43 @@ impl<T> Test2<T> {
             1 => (self, x, y),
             2 => (self, x, y),
             _ => unreachable!(),
+        }
+    }
+}
+
+#[lifetime()]
+enum Demo7<T, U> {
+    X(&GGG<T>, &U),
+    Y(&GGG<U>, &GGG<GGG<T>>)
+}
+
+#[lifetime()]
+impl<T, U> Demo7<T, U> {
+    #[lifetime(
+        "g1 -> self.Y(0)",
+        "g1[GGG].g(0,1) -> self.Y[GGG].g(0,1)"
+        "g2 -> self.Y(1)",
+        "g2[GGG].g(0,1) -> self.Y[GGG,1].g(0,1)",
+        "g2[GGG,1].g(0,1) -> self.Y[GGG,2].g(0,1)",
+    )]
+    fn demo7_1(g1: &GGG<U>, g2: &GGG<GGG<T>>) -> Self {
+        Self::Y(g1, g2)
+    }
+
+    #[lifetime(
+        "x -> (0, 1)"
+        "self.X[GGG].g(0, 1) -> (0)"
+    )]
+    fn demo7_2(&self, x: &T) -> (&T, &T) {
+        match self {
+            Self::X(GGG {
+                g
+            }, _) => {
+                (**g, x)
+            }
+            _ => {
+                (x, x)
+            }
         }
     }
 }

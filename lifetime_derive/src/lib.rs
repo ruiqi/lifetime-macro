@@ -21,11 +21,9 @@ lazy_static! {
 
 #[proc_macro_attribute]
 pub fn lifetime(args: TokenStream, input: TokenStream) -> TokenStream {
-    //println!("args: {:#?}", args);
-    //println!("input: {:#?}", input);
-
     match parse_macro_input!(input as Item) {
         Item::Struct(structure) => macro_struct(structure),
+        Item::Enum(enumeration) => macro_enum(enumeration),
         Item::Impl(implementation) => macro_impl(implementation),
         Item::Fn(function) => {
             let args = parse_macro_input!(args as AttributeArgs);
@@ -45,7 +43,6 @@ pub fn lifetime(args: TokenStream, input: TokenStream) -> TokenStream {
         _ => unreachable!(),
         /*
         Item::Const(_) => {}
-        Item::Enum(_) => {}
         Item::ExternCrate(_) => {}
         Item::ForeignMod(_) => {}
         Item::Macro(_) => {}
@@ -75,6 +72,20 @@ fn macro_struct(mut structure: ItemStruct) -> TokenStream {
     set_lifetime_coords(name, &mut digrphs);
 
     quote!(#structure).into()
+}
+
+fn macro_enum(mut enumeration: ItemEnum) -> TokenStream {
+    //println!("{:#?}", enumeration);
+    let symbol_generator = &mut SymbolGenerator::new(String::from("e_"));
+
+    let name = enumeration.ident.to_string();
+    let origins = vec![ROrigin::EnumVariants(&mut enumeration.variants)];
+    let mut digrphs = get_ref_digrphs(name.clone(), origins);
+
+    set_lifetime_symbols(&mut enumeration.generics, &mut digrphs, symbol_generator);
+    set_lifetime_coords(name, &mut digrphs);
+
+    quote!(#enumeration).into()
 }
 
 fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
@@ -167,7 +178,8 @@ fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
                 }
 
                 // remove instance lifetime macro
-                iim.attrs.retain(|attr| attr.path.segments[0].ident.to_string() != "lifetime");
+                iim.attrs
+                    .retain(|attr| attr.path.segments[0].ident.to_string() != "lifetime");
 
                 // set lifetime symbols
                 let origins = vec![
@@ -255,13 +267,11 @@ fn macro_fn(args: Vec<String>, mut function: ItemFn) -> TokenStream {
 
     set_lifetime_bounds(gps, edges);
 
-    //println!("ref_nodes: {:#?}", ref_nodes);
-
     quote!(#function).into()
 }
 
 fn get_edges(namespace: String, edges: String) -> Vec<(String, u8, String, u8)> {
-    let re = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\[[a-zA-Z_][a-zA-Z0-9_]*(?:,(?:[1-9]\d*|0))?\])*)\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)|([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\[[a-zA-Z_][a-zA-Z0-9_]*(?:,(?:[1-9]\d*|0))?\])*)|\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)").unwrap();
+    let re = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\.(?:[1-9]\d*|0)|\[[a-zA-Z_][a-zA-Z0-9_]*(?:,(?:[1-9]\d*|0))?\])*)\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)|([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\.(?:[1-9]\d*|0)|\[[a-zA-Z_][a-zA-Z0-9_]*(?:,(?:[1-9]\d*|0))?\])*)|\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)").unwrap();
 
     let coord_groups = edges
         .split_whitespace()
@@ -324,11 +334,11 @@ fn set_lifetime_bounds(
     mut gps: HashMap<(String, u8), &mut GenericParam>,
     edges: Vec<(String, u8, String, u8)>,
 ) {
-    println!("gps keys: {:?}", gps.keys());
-    println!("edges: {:?}", edges);
+    //println!("gps keys: {:?}", gps.keys());
+    //println!("edges: {:?}", edges);
 
     for edge in edges {
-        println!("\nedge: {:?}", edge);
+        //println!("\nedge: {:?}", edge);
         let gp_b = gps.get(&(edge.2, edge.3)).unwrap();
         match gp_b {
             GenericParam::Lifetime(ref lf_def_b) => {
