@@ -71,7 +71,8 @@ impl RDigrph {
                     let index = index_counters.entry("".to_string()).or_insert(-1);
                     *index += 1;
 
-                    coords.push((self.name.clone(), *index as u8));
+                    // $ is end
+                    coords.push((format!("{}$", self.name), *index as u8));
                 }
                 
                 // segment coords

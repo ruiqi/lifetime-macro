@@ -4,6 +4,7 @@ extern crate proc_macro;
 
 mod ref_nodes;
 
+use alias_trie::Trie;
 use lazy_static::lazy_static;
 use proc_macro::TokenStream;
 use proc_macro2::{Group, Span, TokenTree};
@@ -93,7 +94,7 @@ fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
     let symbol_generator = &mut SymbolGenerator::new(String::from("i_"));
 
     let mut coords = vec![];
-    let mut gps = HashMap::new();
+    let mut generic_lifetimes_map = HashMap::new();
     let mut edges = vec![];
 
     //println!("self_ty: {:#?}", implementation.self_ty);
@@ -219,10 +220,10 @@ fn macro_impl(mut implementation: ItemImpl) -> TokenStream {
                 }),
         )
     {
-        gps.insert(coord, gp);
+        generic_lifetimes_map.insert(coord, gp);
     }
 
-    set_lifetime_bounds(gps, edges);
+    set_generic_lifetime_bounds(generic_lifetimes_map, edges);
 
     quote!(#implementation).into()
 }
@@ -243,7 +244,7 @@ fn macro_fn(args: Vec<String>, mut function: ItemFn) -> TokenStream {
         coords.extend(digrph.get_coords());
         coords
     });
-    let mut gps = HashMap::new();
+    let mut generic_lifetimes_map = HashMap::new();
     let edges = args.into_iter().fold(vec![], |mut r, arg| {
         r.extend(get_edges(name.clone(), arg));
         r
@@ -262,16 +263,16 @@ fn macro_fn(args: Vec<String>, mut function: ItemFn) -> TokenStream {
                 }),
         )
     {
-        gps.insert(coord, gp);
+        generic_lifetimes_map.insert(coord, gp);
     }
 
-    set_lifetime_bounds(gps, edges);
+    set_generic_lifetime_bounds(generic_lifetimes_map, edges);
 
     quote!(#function).into()
 }
 
 fn get_edges(namespace: String, edges: String) -> Vec<(String, u8, String, u8)> {
-    let re = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\.(?:[1-9]\d*|0)|\[[a-zA-Z_][a-zA-Z0-9_]*(?:,(?:[1-9]\d*|0))?\])*)\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)|([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\.(?:[1-9]\d*|0)|\[[a-zA-Z_][a-zA-Z0-9_]*(?:,(?:[1-9]\d*|0))?\])*)|\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)").unwrap();
+    let re = Regex::new(r"([a-zA-Z_][a-zA-Z0-9_!]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\.(?:[1-9]\d*|0)|\[[a-zA-Z_][a-zA-Z0-9_]*(?:,(?:[1-9]\d*|0))?\])*)\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)|([a-zA-Z_][a-zA-Z0-9_!]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\.(?:[1-9]\d*|0)|\[[a-zA-Z_][a-zA-Z0-9_]*(?:,(?:[1-9]\d*|0))?\])*)|\(((?:[1-9]\d*|0)(?:,(?:[1-9]\d*|0))*)\)").unwrap();
 
     let coord_groups = edges
         .split_whitespace()
@@ -294,10 +295,11 @@ fn get_edges(namespace: String, edges: String) -> Vec<(String, u8, String, u8)> 
                         .collect()
                 });
 
+                // $ is end
                 r.extend(
                     indexs
                         .into_iter()
-                        .map(move |index| (name.to_string(), index.clone())),
+                        .map(move |index| (format!("{}$", name), index.clone())),
                 );
                 r
             })
@@ -330,23 +332,44 @@ fn get_edges(namespace: String, edges: String) -> Vec<(String, u8, String, u8)> 
     edges
 }
 
-fn set_lifetime_bounds(
-    mut gps: HashMap<(String, u8), &mut GenericParam>,
+fn set_generic_lifetime_bounds(
+    mut generic_lifetimes_map: HashMap<(String, u8), &mut GenericParam>,
     edges: Vec<(String, u8, String, u8)>,
 ) {
-    //println!("gps keys: {:?}", gps.keys());
+    //println!(
+    //    "\n============================\ngeneric_lifetimes_map keys: {:?}",
+    //    generic_lifetimes_map.keys()
+    //);
     //println!("edges: {:?}", edges);
 
-    for edge in edges {
-        //println!("\nedge: {:?}", edge);
-        let gp_b = gps.get(&(edge.2, edge.3)).unwrap();
-        match gp_b {
+    let abbr_names_trie = get_abbr_names_trie(&generic_lifetimes_map);
+    //println!("trie: {:#?}", abbr_names_trie);
+
+    for (name1, index1, name2, index2) in edges {
+        // change abbr name to full name
+        //println!(
+        //    "before edge: ({}, {}) -> ({}, {})",
+        //    name1, index1, name2, index2
+        //);
+        let name1 = abbr_names_trie.get(&name1.split(".").collect::<Vec<_>>());
+        //println!("name1: {:?}", name1);
+        let name1 = (*name1.unwrap()).clone();
+        let name2 = abbr_names_trie.get(&name2.split(".").collect::<Vec<_>>());
+        //println!("name2: {:?}", name2);
+        let name2 = (*name2.unwrap()).clone();
+        //println!(
+        //    "after edge: ({}, {}) -> ({}, {})",
+        //    name1, index1, name2, index2
+        //);
+
+        let param_b = generic_lifetimes_map.get(&(name2, index2)).unwrap();
+        match param_b {
             GenericParam::Lifetime(ref lf_def_b) => {
                 //println!("lf_def_b: {:?}", lf_def_b);
                 let symbol = format!("'{}", lf_def_b.lifetime.ident);
 
-                let gp_a = gps.get_mut(&(edge.0, edge.1)).unwrap();
-                match gp_a {
+                let param_a = generic_lifetimes_map.get_mut(&(name1, index1)).unwrap();
+                match param_a {
                     GenericParam::Lifetime(ref mut lf_def_a) => {
                         //println!("lf_def_a: {:?}", lf_def_a);
                         let lf = Lifetime::new(&symbol, Span::call_site());
@@ -482,4 +505,43 @@ fn set_lifetime_symbols(
             }
         }
     }
+}
+
+fn get_abbr_names_trie(
+    generic_lifetimes_map: &HashMap<(String, u8), &mut GenericParam>,
+) -> Trie<String, String> {
+    let mut trie = Trie::new();
+
+    let names = generic_lifetimes_map
+        .keys()
+        .map(|(name, _)| (*name).clone())
+        .collect::<Vec<_>>();
+
+    for name in names {
+        let path = name.split(".").map(|s| s.to_string()).collect::<Vec<_>>();
+
+        trie.insert(&path, name);
+
+        let re = Regex::new(r"\[[^\[\]]+\]").unwrap();
+        let path_aliases = path
+            .iter()
+            .map(|cell1| {
+                let cell2 = re.replace(cell1, "").to_string();
+                if cell1.len() == cell2.len() {
+                    vec![]
+                } else {
+                    vec![cell2]
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let path = &path.iter().map(|s| s).collect::<Vec<_>>()[..];
+        let path_aliases = &path_aliases
+            .iter()
+            .map(|alies| &alies[..])
+            .collect::<Vec<_>>()[..];
+        trie.update_aliases(path, path_aliases);
+    }
+
+    trie
 }
