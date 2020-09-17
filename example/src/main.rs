@@ -14,22 +14,18 @@ struct Parser {
 
 #[lifetime()]
 impl Parser {
-    #[lifetime(
-        "self.context.0(0) -> (0)"  // self.context[Context,0].0(0) => Output!(0)
-    )]
+    #[lifetime("self.context.0(0) -> (0)")] // "self.context[Context,0].0(0) => Output!(0)"
     fn parse(&self) -> Result<(), &str> {
         Err(&self.context.0[1..])
     }
 }
 
-#[lifetime(
-    "context.0(0) -> (0)"  // context[Context,0].0(0) -> Output!(0)
-)]
+#[lifetime("context.0(0) -> (0)")] // "context[Context,0].0(0) -> Output!(0)"
 fn parse_context(context: Context) -> Result<(), &str> {
     Parser { context: &context }.parse()
 }
 
-#[lifetime("x(0), y(0) -> (0)")]
+#[lifetime("x(0), y(0) -> (0)")] // "x(0), y(0) -> Output!(0)"
 fn demo0<T, U>(x: &T, y: &T) -> &T {
     if true {
         x
@@ -38,7 +34,7 @@ fn demo0<T, U>(x: &T, y: &T) -> &T {
     }
 }
 
-#[lifetime("x(0), y(0) -> (0), (1)")]
+#[lifetime("x(0), y(0) -> (0, 1)")] // "x(0), y(0) -> Output!(0, 1)"
 fn demo1<T, U>(x: &T, y: &T) -> (&T, &T) {
     if true {
         (x, y)
@@ -47,7 +43,7 @@ fn demo1<T, U>(x: &T, y: &T) -> (&T, &T) {
     }
 }
 
-#[lifetime("x(0), y(0) -> (0), (1)", "z1, z2 -> (2)")]
+#[lifetime("x(0), y(0) -> (0, 1)", "z1, z2 -> (2)")] // "x(0), y(0) -> Output!(0, 1)", "z1(0), z2(0) -> Output!(2)"
 fn demo2<T, U: PartialOrd>(x: &T, y: &T, z1: &U, z2: &U) -> (&T, &T, &U) {
     if z1 >= z2 {
         (x, y, z1)
@@ -65,7 +61,7 @@ struct Demo3<G, R> {
 
 #[lifetime()]
 impl<G, R> Demo3<G, R> {
-    #[lifetime("x, y -> (0)")]
+    #[lifetime("x, y -> (0)")] // "x(0), y(0) -> Output!(0)"
     fn demo3_0<T, U>(&self, x: &T, y: &T) -> &T {
         if true {
             x
@@ -74,7 +70,7 @@ impl<G, R> Demo3<G, R> {
         }
     }
 
-    #[lifetime("x, y -> (0, 1)")]
+    #[lifetime("x, y -> (0, 1)")] // "x(0), y(0) -> Output!(0, 1)"
     fn demo3_1<T, U>(&self, x: &T, y: &T) -> (&T, &T) {
         if true {
             (x, y)
@@ -83,7 +79,7 @@ impl<G, R> Demo3<G, R> {
         }
     }
 
-    #[lifetime("x, y -> (0, 1)", "z1, z2 -> (1, 2)")]
+    #[lifetime("x, y -> (0, 1)", "z1, z2 -> (1, 2)")] // "x(0), y(0) -> Output!(0, 1)", "z1(0), z2(0) -> Output!(1, 2)"
     fn demo3_2<T, U: PartialOrd>(&self, x: &T, y: &T, z1: &U, z2: &U) -> (&T, &T, &U) {
         if z1 >= z2 {
             (x, y, z1)
@@ -102,19 +98,19 @@ struct Demo4<G, R> {
 
 #[lifetime()]
 impl<G, R> Demo4<G, R> {
-    #[lifetime("x -> self.x", "y -> self.y", "z -> self.z")]
+    #[lifetime("x -> self.x", "y -> self.y", "z -> self.z")] // "x(0) -> self.x(0)", "y(0) -> self.y(0)", "z(0) -> self.z(0)"
     fn demo4_0(x: &G, y: &G, z: &R) -> Self {
         Self { x: x, y: y, z: z }
     }
 
-    #[lifetime("x -> self.x", "y -> self.y", "z -> self.z")]
+    #[lifetime("x -> self.x", "y -> self.y", "z -> self.z")] // "x(0) -> self.x(0)", "y(0) -> self.y(0)", "z(0) -> self.z(0)"
     fn demo4_1(x: &G, y: &G, z: &R) -> i64 {
         Self { x: x, y: y, z: z };
 
         18
     }
 
-    #[lifetime("self -> (0)", "x -> self.x", "z -> self.z")]
+    #[lifetime("x -> self.x", "z -> self.z", "self -> (0)")] // "x(0) -> self.x(0)", "z(0) -> self.z(0)", "self(0) -> Output!(0)"
     fn demo4_2(&mut self, x: &G, z: &R) -> &Self {
         self.x = x;
         self.z = z;
@@ -122,10 +118,10 @@ impl<G, R> Demo4<G, R> {
     }
 
     #[lifetime(
-        "x -> self.x -> (1)",
-        "y -> self.y -> (1)",
-        "z -> self.z, (2)",
-        "self -> (0)"
+        "x -> self.x -> (1)",  // "x(0) -> self.x(0) -> Output!(1)"
+        "y -> self.y -> (1)",  // "y(0) -> self.y(0) -> Output!(1)"
+        "z -> self.z, (2)",  // "z(0) -> self.z(0), Output!(2)"
+        "self -> (0)"  // "self(0) -> Output!(0)"
     )]
     fn demo4_3(&mut self, x: &G, y: &G, z: &R) -> (&Self, &G, &R) {
         self.x = x;
@@ -150,9 +146,9 @@ struct Deom5<G> {
 #[lifetime()]
 impl<G> Deom5<G> {
     #[lifetime(
-        "x, self.x -> (0, 1)"
-        "y, self.y -> (0, 1)"
-        "z, self.z -> (0, 1)"
+        "x, self.x -> (0, 1)"  // "x(0), self.x(0) -> Output!(0, 1)"
+        "y, self.y -> (0, 1)"  // "y(0), self.y(0) -> Output!(0, 1)"
+        "z, self.z -> (0, 1)"  // "z(0), self.z(0) -> Output!(0, 1)"
     )]
     fn demo5_0(&mut self, x: &G, y: &G, z: &G) -> (&G, &G) {
         match 0 {
@@ -167,9 +163,9 @@ impl<G> Deom5<G> {
     }
 
     #[lifetime(
-        "x -> self.x -> (0, 1)"
-        "y -> self.y -> (0, 1)"
-        "z -> self.z -> (0, 1)"
+        "x -> self.x -> (0, 1)"  // "x(0) -> self.x(0) -> Output!(0, 1)"
+        "y -> self.y -> (0, 1)"  // "x(0) -> self.y(0) -> Output!(0, 1)"
+        "z -> self.z -> (0, 1)"  // "z(0) -> self.z(0) -> Output!(0, 1)"
     )]
     fn demo5_1(&mut self, x: &G, y: &G, z: &G) -> (&G, &G) {
         self.x = x;
@@ -187,7 +183,7 @@ impl<G> Deom5<G> {
         }
     }
 
-    #[lifetime("x -> self.x -> (0)", "y -> self.y -> (0)", "z -> self.z -> (0)")]
+    #[lifetime("x -> self.x -> (0)", "y -> self.y -> (0)", "z -> self.z -> (0)")] // "x(0) -> self.x(0) -> Output!(0)", "y(0) -> self.y(0) -> Output!(0)", "z(0) -> self.z(0) -> Output!(0)"
     fn demo5_2(&self, x: &G, y: &G, z: &G) -> &G {
         let demo5 = Self { x: x, y: y, z: z };
 
@@ -221,21 +217,15 @@ struct Demo6C<T, U> {
 #[lifetime()]
 impl<T, U> Demo6C<T, U> {
     #[lifetime(
-        "self.b.Single(0), self.b.Double(0), self.b.Multiple(1) -> (0)"
-        "self.b.Single.0(0), self.b.Double[Demo6A,0].0(0), self.b.Multiple.0(0) -> Output![Demo6A,0].0(0)",
-        "self.b.Single.1(0), self.b.Double[Demo6A,0].1(0), self.b.Multiple.1(0) -> Output![Demo6A,0].1(0)",
+        "self.b.Single(0), self.b.Double(0), self.b.Multiple(1) -> (0)"  // "self.b[Demo6B,0].Single(0), self.b[Demo6B,0].Double(0), self.b[Demo6B,0].Multiple(1) -> Output!(0)"
+        "self.b.Single.0(0), self.b.Double[Demo6A,0].0(0), self.b.Multiple.0(0) -> Output!.0(0)", // "self.b[Demo6B,0].Single[Demo6A,0].0(0), self.b[Demo6B,0].Double[Demo6A,0].0(0), self.b[Demo6B,0].Multiple[Demo6A,0].0(0) -> Output![Demo6A,0].0(0)"
+        "self.b.Single.1(0), self.b.Double[Demo6A,0].1(0), self.b.Multiple.1(0) -> Output!.1(0)", // "self.b[Demo6B,0].Single[Demo6A,0].1(0), self.b[Demo6B,0].Double[Demo6A,0].1(0), self.b[Demo6B,0].Multiple[Demo6A,0].1(0) -> Output![Demo6A,0].1(0)"
     )]
     fn first(&self) -> Option<&Demo6A<T, U>> {
         match self.b {
-            Demo6B::Single(single) => {
-                Some(single)
-            }
-            Demo6B::Double(double) => {
-                Some(double.0)
-            }
-            Demo6B::Multiple(multiple) => {
-                multiple.first().map(|a| *a)
-            }
+            Demo6B::Single(single) => Some(single),
+            Demo6B::Double(double) => Some(double.0),
+            Demo6B::Multiple(multiple) => multiple.first().map(|a| *a),
         }
     }
 }
