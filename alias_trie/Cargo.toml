@@ -1,8 +1,10 @@
 [package]
 name = "alias_trie"
-version = "0.1.0"
+version = "0.9.0"
 authors = ["ruiqi <smile.ruiqi@gmail.com>"]
 edition = "2018"
+description = "A trie that supports nodes with aliases. It can easily and quickly deal with grammatical ambiguities caused by abbreviations, abbreviations or abbreviations in daily grammar, and provide correct and fast retrieval capabilities."
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
