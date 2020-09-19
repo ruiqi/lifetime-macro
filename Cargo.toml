@@ -3,6 +3,4 @@
 members = [
     "example",
     "lifetime_derive",
-    "alias_trie",
-    "mutable_hashset",
 ]

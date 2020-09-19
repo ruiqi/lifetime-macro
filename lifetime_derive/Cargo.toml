@@ -16,5 +16,4 @@ proc-macro2 = "1.0"
 lazy_static = "1.4"
 regex = "1.3"
 itertools = "0.9"
-mutable_hashset = { path = "../mutable_hashset" }
-alias_trie = { path = "../alias_trie" }
+alias_trie = "0.9"
