@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![feature(member_constraints)]
 
 use lifetime_derive::lifetime;
 
@@ -229,5 +230,173 @@ impl<T, U> Demo6C<T, U> {
         }
     }
 }
+
+#[lifetime(
+    "x -> y -> (0)"
+)]
+fn f(x: &i32, mut y: &i32) -> &i32 {
+    y = x;
+
+    y
+}
+
+#[lifetime()]
+trait Demo7T<T> {
+    fn new(x: &T) -> Self
+    where
+        Self: Sized;
+
+    fn demo7t_0(&self, t1: &T, t2: &T) -> &T;
+}
+
+#[lifetime()]
+struct Demo7A<T> {
+    x: &T,
+}
+
+#[lifetime()]
+impl<T> Demo7T<T> for Demo7A<T>
+where
+    T: Ord,
+{
+    #[lifetime(
+        "x -> self.x"
+    )]
+    fn new(x: &T) -> Self {
+        Demo7A { x: x }
+    }
+
+    #[lifetime(
+        "t1, t2, self.x -> (0)"
+    )]
+    fn demo7t_0(&self, t1: &T, t2: &T) -> &T {
+        &[self.x, t1, t2].iter().max().unwrap()
+    }
+}
+
+#[lifetime()]
+struct Deom7B<T> {
+    x: &T,
+}
+
+#[lifetime()]
+impl<T> Demo7T<T> for Deom7B<T>
+where
+    T: Ord,
+{
+    #[lifetime(
+        "x -> self.x"
+    )]
+    fn new(x: &T) -> Self {
+        Deom7B { x: x }
+    }
+
+    #[lifetime(
+        "t1, t2, self.x -> (0)"
+    )]
+    fn demo7t_0(&self, t1: &T, t2: &T) -> &T {
+        &[t1, t2].iter().min().unwrap()
+    }
+}
+
+#[lifetime(
+    // "x -> Output![Demo7T,0].new/x, Output![Demo7T,1].new/x"
+)]
+fn demo7c<T, U1: Demo7T<T>, U2: Demo7T<T>>(x: &T, y: &T) -> (U1, U2)
+where
+    T: Ord,
+{
+    (U1::new(x), U2::new(x))
+}
+
+/*
+fn demo7cX<'f_a1, 'f_b1, 'f_c1, 'f_d1, 'f_e1, 'f_a2, 'f_b2, 'f_c2, 'f_d2, 'f_e2,'f_f: 'f_a2, T, U1: Demo7T<'f_a1, 'f_b1, 'f_c1, 'f_d1, 'f_e1, T>, U2: Demo7T<'f_a2, 'f_b2, 'f_c2, 'f_d2, 'f_e2, T>>(
+    x: &'f_f T,
+) -> U2
+where
+    T: Ord,
+{
+    Demo7T::new(x)
+}
+
+#[lifetime()]
+fn demo7d<'a, T>(x: &'a T) -> impl Demo7T<'a, T>
+where
+    T: Ord,
+{
+    Demo7A { x: x }
+}
+
+fn demo7e<'a, T>(x: &'a T) -> Box<dyn 'a + Demo7T<'a, T>>
+where
+    T: Ord,
+{
+    if true {
+        Box::new(Demo7A { x: x })
+    } else {
+        Box::new(Deom7B { x: x })
+    }
+}
+*/
+
+/*
+#[lifetime("(0, 1) -> (2)")]
+fn demo8<T>() -> fn(&T, &T) -> &T {
+    |a, b| {
+        if true {
+            a
+        } else {
+            b
+        }
+    }
+}
+
+
+#[lifetime("(1, 2) -> (3)")]
+fn demo9<T>() -> &impl Fn(&T, &T) -> &T {
+    &|a, b| {
+        if true {
+            a
+        } else {
+            b
+        }
+    }
+}
+*/
+
+/*
+struct Deom7_S {}
+
+impl<'a> Demo7_T for &'a Deom7_S {}
+
+trait Foo {}
+
+impl<'a> Foo for &'a() {}
+
+impl<'a> Foo for Box<dyn 'a + Foo> {}
+
+/*
+#[lifeitime(
+    "x(1) -> "
+)]
+*/
+fn through_box<'a>(x: &'a ()) -> impl 'a + Foo {
+    let box_: Box<dyn Foo> = Box::new(x);
+    box_
+}
+
+/*
+trait Foo {}
+
+impl Foo for () {}
+
+impl Foo for Box<dyn Foo> {}
+
+fn through_box(x: ()) -> impl Foo {
+    let box_: Box<dyn Foo> = Box::new(x);
+    box_
+}
+*/
+*/
 
 fn fix_cargo_expand_bug() {}

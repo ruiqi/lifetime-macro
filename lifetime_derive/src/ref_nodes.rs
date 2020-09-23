@@ -1,4 +1,5 @@
 use proc_macro2::Span;
+use quote::quote;
 use regex::Regex;
 use std::collections::HashMap;
 use syn::punctuated::Punctuated;
@@ -74,7 +75,7 @@ impl RDigrph {
                     // $ is end
                     coords.push((format!("{}$", self.name), *index as u8));
                 }
-                
+
                 // segment coords
                 RNode::Segment(SegmentNode {
                     segment,
@@ -114,9 +115,12 @@ pub enum ROrigin<'a> {
     FnOutput(&'a mut ReturnType),
     StructFields(&'a mut Fields),
     EnumVariants(&'a mut Punctuated<Variant, token::Comma>),
+    SelfTY(&'a mut Box<Type>),
+    Trait(&'a mut Option<(Option<Token![!]>, Path, Token![for])>),
+    Generics(&'a mut Generics),
 }
 
-pub fn get_ref_digrphs<'a>(name: String, origins: Vec<ROrigin<'a>>) -> Vec<RDigrph> {
+pub fn get_ref_digrphs<'a>(namespace: String, origins: Vec<ROrigin<'a>>) -> Vec<RDigrph> {
     let mut digrphs = vec![];
 
     for origin in origins {
@@ -132,13 +136,13 @@ pub fn get_ref_digrphs<'a>(name: String, origins: Vec<ROrigin<'a>>) -> Vec<RDigr
                         }) => {
                             *olf = Some(Lifetime::new("'null", Span::call_site()));
 
-                            digrph.name = format!("{}/{}", name, "self");
+                            digrph.name = format_digrph_name(namespace.clone(), "self".to_string());
                             digrph
                                 .nodes
                                 .push(RNode::new_lifetime(olf.as_mut().unwrap()));
                         }
                         FnArg::Typed(pt) => {
-                            digrph.name = format!("{}/{}", name, get_name_from_pat(&pt.pat));
+                            digrph.name = format_digrph_name(namespace.clone(), get_name_from_pat(&pt.pat));
                             digrph.nodes.extend(get_ref_nodes_from_type(&mut *pt.ty));
                         }
                         _ => (),
@@ -148,10 +152,10 @@ pub fn get_ref_digrphs<'a>(name: String, origins: Vec<ROrigin<'a>>) -> Vec<RDigr
                 }
             }
             ROrigin::FnOutput(output) => {
-                let mut digrph = RDigrph::new(format!("{}/{}", name, "Output!"));
+                let mut digrph = RDigrph::new(format_digrph_name(namespace.clone(), "Output!".to_string()));
 
                 match output {
-                    ReturnType::Type(_, box ref mut ty) => {
+                    ReturnType::Type(_, box ty) => {
                         digrph.nodes.extend(get_ref_nodes_from_type(ty));
                     }
                     _ => (),
@@ -165,7 +169,7 @@ pub fn get_ref_digrphs<'a>(name: String, origins: Vec<ROrigin<'a>>) -> Vec<RDigr
                         .ident
                         .as_ref()
                         .map_or(i.to_string(), |ident| ident.to_string());
-                    let mut digrph = RDigrph::new(format!("{}/{}", name, field_name));
+                    let mut digrph = RDigrph::new(format_digrph_name(namespace.clone(), field_name));
 
                     digrph.nodes.extend(get_ref_nodes_from_type(&mut field.ty));
 
@@ -174,13 +178,96 @@ pub fn get_ref_digrphs<'a>(name: String, origins: Vec<ROrigin<'a>>) -> Vec<RDigr
             }
             ROrigin::EnumVariants(variants) => {
                 for variant in variants.iter_mut() {
-                    let mut digrph = RDigrph::new(format!("{}/{}", name, variant.ident));
+                    let mut digrph =
+                        RDigrph::new(format_digrph_name(namespace.clone(), variant.ident.to_string()));
 
                     for field in variant.fields.iter_mut() {
                         digrph.nodes.extend(get_ref_nodes_from_type(&mut field.ty));
                     }
 
                     digrphs.push(digrph);
+                }
+            }
+            ROrigin::SelfTY(self_ty) => {
+                let mut digrph = RDigrph::new(format_digrph_name(namespace.clone(), "self".to_string()));
+
+                digrph
+                    .nodes
+                    .extend(get_ref_nodes_from_type(self_ty.as_mut()));
+
+                digrphs.push(digrph);
+            }
+            ROrigin::Trait(trait_) => {
+                let mut digrph = RDigrph::new(format_digrph_name(namespace.clone(), "trait".to_string()));
+
+                match trait_ {
+                    Some((_, path, _)) => digrph.nodes.extend(get_ref_nodes_from_path(path)),
+                    None => (),
+                }
+
+                digrphs.push(digrph);
+            }
+            ROrigin::Generics(generics) => {
+                for gp in generics.params.iter_mut() {
+                    match gp {
+                        GenericParam::Type(tp) => {
+                            let mut digrph =
+                                RDigrph::new(format_digrph_name(namespace.clone(), tp.ident.to_string()));
+
+                            for tpb in tp.bounds.iter_mut() {
+                                if let TypeParamBound::Trait(tb) = tpb {
+                                    digrph.nodes.extend(get_ref_nodes_from_path(&mut tb.path))
+                                }
+                            }
+
+                            digrphs.push(digrph);
+                        }
+                        GenericParam::Const(cp) => {
+                            let mut digrph =
+                                RDigrph::new(format_digrph_name(namespace.clone(), cp.ident.to_string()));
+                            digrph.nodes.extend(get_ref_nodes_from_type(&mut cp.ty));
+
+                            digrphs.push(digrph);
+                        }
+                        GenericParam::Lifetime(_) => (),
+                    }
+                }
+
+                if let Some(where_clause) = &mut generics.where_clause {
+                    for (i, predicate) in where_clause.predicates.iter_mut().enumerate() {
+                        match predicate {
+                            WherePredicate::Type(PredicateType {
+                                bounded_ty, bounds, ..
+                            }) => {
+                                // second half
+                                let mut digrph = RDigrph::new(format_digrph_name(
+                                    namespace.clone(),
+                                    quote!(#bounded_ty)
+                                        .to_string()
+                                        .split_whitespace()
+                                        .collect::<String>(),
+                                ));
+
+                                for tpb in bounds.iter_mut() {
+                                    if let TypeParamBound::Trait(tb) = tpb {
+                                        digrph.nodes.extend(get_ref_nodes_from_path(&mut tb.path))
+                                    }
+                                }
+
+                                digrphs.push(digrph);
+
+                                // first half
+                                let mut digrph =
+                                    RDigrph::new(format_digrph_name(namespace.clone(), i.to_string()));
+
+                                digrph.nodes.extend(get_ref_nodes_from_type(bounded_ty));
+
+                                digrphs.push(digrph);
+                            }
+                            WherePredicate::Eq(_) => (),
+                            WherePredicate::Lifetime(_) => (),
+                        }
+                    }
                 }
             }
         }
@@ -194,37 +281,59 @@ fn get_ref_nodes_from_type<'a>(ty: &'a mut Type) -> Vec<RNode> {
     let mut nodes = vec![];
 
     match ty {
-        Type::Reference(ref mut tr) => {
+        Type::Reference(tr) => {
             tr.lifetime = Some(Lifetime::new("'null", Span::call_site()));
 
             nodes.push(RNode::new_lifetime(tr.lifetime.as_mut().unwrap()));
             nodes.extend(get_ref_nodes_from_type(&mut *tr.elem));
         }
-        Type::Tuple(ref mut tt) => {
+        Type::Tuple(tt) => {
             for elem in tt.elems.iter_mut() {
                 nodes.extend(get_ref_nodes_from_type(elem));
             }
         }
-        Type::Path(TypePath {
-            ref mut qself,
-            path: ref mut pt,
-            ..
-        }) => {
+        Type::Path(TypePath { qself, path, .. }) => {
             if let Some(qself) = qself {
                 nodes.extend(get_ref_nodes_from_type(&mut *qself.ty));
             }
 
-            nodes.extend(get_ref_nodes_from_path(pt));
+            nodes.extend(get_ref_nodes_from_path(path));
         }
+        Type::BareFn(bf) => {
+            //println!("BareFn: {:#?}", bf);
+
+            // bare fn inputs
+            for input in bf.inputs.iter_mut() {
+                nodes.extend(get_ref_nodes_from_type(&mut input.ty));
+            }
+
+            //bare fn output
+            match &mut bf.output {
+                ReturnType::Type(_, box ty) => {
+                    nodes.extend(get_ref_nodes_from_type(ty));
+                }
+                _ => (),
+            }
+        }
+        Type::ImplTrait(it) => {
+            //println!("ImplTrait: {:#?}", it);
+
+            for bound in it.bounds.iter_mut() {
+                match bound {
+                    TypeParamBound::Trait(tb) => {
+                        nodes.extend(get_ref_nodes_from_path(&mut tb.path));
+                    }
+                    TypeParamBound::Lifetime(_) => (),
+                }
+            }
+        }
+        Type::Infer(_) => (),
         _ => {
-            //println!("ty: {:#?}", ty);
+            println!("ty: {:#?}", ty);
             unreachable!()
         } /*
           Type::Array(_) => {}
-          Type::BareFn(_) => {}
           Type::Group(_) => {}
-          Type::ImplTrait(_) => {}
-          Type::Infer(_) => {}
           Type::Macro(_) => {}
           Type::Never(_) => {}
           Type::Paren(_) => {}
@@ -306,5 +415,13 @@ fn get_name_from_pat(pat: &Pat) -> String {
         Pat::Reference(PatReference { box ref pat, .. }) => get_name_from_pat(pat),
         Pat::Type(PatType { box ref pat, .. }) => get_name_from_pat(pat),
         _ => unreachable!(),
+    }
+}
+
+fn format_digrph_name(namespace: String, name: String) -> String {
+    if namespace.is_empty() {
+        name
+    } else {
+        format!("{}/{}", namespace, name)
     }
 }
